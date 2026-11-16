@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Socks5 Proxy</string>
+    <string name="vpn_channel_name">Socks5 Прокси Сервис</string>
+    <string name="vpn_channel_desc">Уведомление о состоянии туннеля SOCKS5</string>
+    <string name="notification_title_connected">SOCKS5 прокси активен</string>
+    <string name="notification_title_disconnected">SOCKS5 отключен</string>
+    <string name="disconnect_action">Отключить</string>
+</resources>
