@@ -90,7 +90,6 @@ fun MainScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Connection & Dashboard Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -193,7 +192,6 @@ fun MainScreen(
                     HorizontalDivider(color = BorderDark)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Metrics Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -218,7 +216,6 @@ fun MainScreen(
                 }
             }
 
-            // 2. Per-App Routing Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -260,7 +257,7 @@ fun MainScreen(
 
                         Switch(
                             checked = config.isPerAppRoutingEnabled,
-                            onCheckedChange = null, // handled by toggleable row
+                            onCheckedChange = null,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = TextPrimary,
                                 checkedTrackColor = AccentCyan,
@@ -295,7 +292,6 @@ fun MainScreen(
                 }
             }
 
-            // 3. SOCKS5 Server Parameters Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -315,7 +311,6 @@ fun MainScreen(
                         fontWeight = FontWeight.SemiBold
                     )
 
-                    // Host & Port Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -358,7 +353,6 @@ fun MainScreen(
                         )
                     }
 
-                    // Username
                     OutlinedTextField(
                         value = config.username,
                         onValueChange = { viewModel.updateUsername(it) },
@@ -377,7 +371,6 @@ fun MainScreen(
                         )
                     )
 
-                    // Password with accessible toggle
                     OutlinedTextField(
                         value = config.password,
                         onValueChange = { viewModel.updatePassword(it) },
@@ -406,7 +399,6 @@ fun MainScreen(
                         )
                     )
 
-                    // UDP Switch Row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -439,7 +431,6 @@ fun MainScreen(
                         )
                     }
 
-                    // Ping Checker Button
                     Button(
                         onClick = { viewModel.checkProxyPing() },
                         modifier = Modifier.fillMaxWidth(),
@@ -461,7 +452,6 @@ fun MainScreen(
                         }
                     }
 
-                    // Ping Result Box with LiveRegion for screen readers
                     uiState.pingResult?.let { res ->
                         Box(
                             modifier = Modifier

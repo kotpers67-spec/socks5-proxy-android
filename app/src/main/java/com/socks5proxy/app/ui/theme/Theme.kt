@@ -1,6 +1,5 @@
 package com.socks5proxy.app.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -26,7 +25,7 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun Socks5ProxyTheme(
-    darkTheme: Boolean = true, // Default to dark Swiss Clean UI
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
     MaterialTheme(

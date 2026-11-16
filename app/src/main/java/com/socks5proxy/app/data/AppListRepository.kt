@@ -18,7 +18,6 @@ class AppListRepository(private val context: Context) {
         val pm = context.packageManager
         val myPackage = context.packageName
 
-        // Query installed applications without heavy meta-data parsing
         val apps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
         } else {
@@ -29,7 +28,6 @@ class AppListRepository(private val context: Context) {
         val resultList = mutableListOf<AppInfo>()
 
         for (app in apps) {
-            // Exclude our own app from selection to avoid routing loop
             if (app.packageName == myPackage) continue
 
             val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
@@ -52,7 +50,6 @@ class AppListRepository(private val context: Context) {
             )
         }
 
-        // Sort: selected first, then non-system first, then alphabetical by name
         resultList.sortedWith(
             compareByDescending<AppInfo> { it.isSelected }
                 .thenBy { it.isSystemApp }

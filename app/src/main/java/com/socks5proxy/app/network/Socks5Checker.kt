@@ -30,7 +30,6 @@ object Socks5Checker {
         var socket: Socket? = null
 
         try {
-            // DNS resolution with explicit timeout
             val inetAddress = withTimeout(timeoutMs.toLong()) {
                 InetAddress.getByName(config.host.trim())
             }
@@ -49,7 +48,6 @@ object Socks5Checker {
             val input: InputStream = socket.getInputStream()
             val hasAuth = config.username.isNotEmpty()
 
-            // 1. SOCKS5 Greeting
             if (hasAuth) {
                 out.write(byteArrayOf(SOCKS_VERSION_5.toByte(), 0x02, METHOD_NO_AUTH.toByte(), METHOD_USER_PASS.toByte()))
             } else {
@@ -73,7 +71,6 @@ object Socks5Checker {
                 return@withContext PingResult(false, 0, "Сервер отклонил предложенные методы авторизации")
             }
 
-            // 2. RFC 1929 Username/Password Sub-negotiation
             if (chosenMethod == METHOD_USER_PASS) {
                 if (!hasAuth) {
                     return@withContext PingResult(false, 0, "Сервер требует авторизацию (логин и пароль)")

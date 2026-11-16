@@ -57,7 +57,6 @@ class Socks5VpnService : VpnService() {
             return
         }
 
-        // Empty per-app guard
         if (config.isPerAppRoutingEnabled && config.allowedApps.isEmpty()) {
             updateStatus(TunnelStatus(TunnelState.ERROR, "Выберите хотя бы одно приложение для проксирования"))
             stopSelf()
@@ -67,10 +66,8 @@ class Socks5VpnService : VpnService() {
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Установка соединения..."))
 
         try {
-            // 1. Create sanitized YAML config for hev-socks5-tunnel
             configFile = createHevConfigFile(config)
 
-            // 2. Configure VpnService.Builder with MTU 1400 to prevent PMTU blackholes
             val builder = Builder()
                 .setSession("SOCKS5: ${config.host}:${config.port}")
                 .setMtu(config.mtu)
@@ -79,18 +76,16 @@ class Socks5VpnService : VpnService() {
                 .addDnsServer(config.secondaryDns)
                 .addRoute("0.0.0.0", 0)
 
-            // 3. IPv6 support if enabled
             if (config.isIpv6Enabled) {
                 try {
                     builder.addAddress("fc00::2", 128)
                     builder.addDnsServer("2606:4700:4700::1111")
                     builder.addRoute("::", 0)
                 } catch (e: Exception) {
-                    Log.w(TAG, "IPv6 не поддерживается сетью: ${e.message}")
+                    Log.w(TAG, "IPv6 не поддерживается: ${e.message}")
                 }
             }
 
-            // 4. Per-App Split Tunneling with routing loop protection
             if (config.isPerAppRoutingEnabled) {
                 var addedCount = 0
                 val safeApps = config.allowedApps.filter { it != packageName }
@@ -102,9 +97,7 @@ class Socks5VpnService : VpnService() {
                         Log.w(TAG, "Пропуск пакета $pkg: ${e.message}")
                     }
                 }
-                Log.i(TAG, "Split-tunneling активен для $addedCount приложений")
             } else {
-                // Route all traffic, but exclude this app from tunnel to prevent loop
                 try {
                     builder.addDisallowedApplication(packageName)
                 } catch (e: Exception) {
@@ -112,14 +105,10 @@ class Socks5VpnService : VpnService() {
                 }
             }
 
-            // 5. Establish TUN Interface
             val pfd = builder.establish() ?: throw IllegalStateException("Не удалось создать сетевой интерфейс VpnService")
             vpnInterface = pfd
 
-            // 6. Start Foreground Service Notification
             startForeground(Socks5App.NOTIFICATION_ID, buildNotification(config))
-
-            // 7. Start native hev-socks5-tunnel
             TProxyService.TProxyStartService(configFile!!.absolutePath, pfd.fd)
 
             val startTime = System.currentTimeMillis()
@@ -131,7 +120,6 @@ class Socks5VpnService : VpnService() {
                 )
             )
 
-            // 8. Polling stats coroutine (every 1500ms)
             startStatsPolling()
 
         } catch (e: Exception) {
@@ -170,7 +158,6 @@ class Socks5VpnService : VpnService() {
     private fun createHevConfigFile(config: ProxyConfig): File {
         val file = File(cacheDir, "hev_tunnel_config.yml")
 
-        // YAML sanitization against injection
         val cleanUser = config.username.replace("\r", "").replace("\n", "").replace("'", "''")
         val cleanPass = config.password.replace("\r", "").replace("\n", "").replace("'", "''")
         val cleanHost = config.host.trim().replace("\r", "").replace("\n", "").replace("'", "''")
@@ -285,7 +272,7 @@ misc:
                 file.delete()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Ошибка безопасного удаления файла ${file.name}: ${e.message}")
+            Log.w(TAG, "Ошибка удаления: ${e.message}")
         }
     }
 

@@ -36,7 +36,7 @@ fun AppSelectorSheet(
     onDismiss: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var filterMode by remember { mutableStateOf(0) } // 0 = Все, 1 = Только выбранные, 2 = Пользовательские
+    var filterMode by remember { mutableStateOf(0) }
 
     val queryClean = remember(searchQuery) { searchQuery.trim().lowercase() }
 
@@ -69,7 +69,6 @@ fun AppSelectorSheet(
                 .fillMaxHeight(0.88f)
                 .padding(horizontal = 16.dp)
         ) {
-            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -91,7 +90,7 @@ fun AppSelectorSheet(
                 IconButton(onClick = onDismiss) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Закрыть окно выбора приложений",
+                        contentDescription = "Закрыть",
                         tint = TextSecondary
                     )
                 }
@@ -99,7 +98,6 @@ fun AppSelectorSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Search Bar
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -111,7 +109,7 @@ fun AppSelectorSheet(
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
                         IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Очистить строку поиска", tint = TextMuted)
+                            Icon(Icons.Default.Clear, contentDescription = "Очистить", tint = TextMuted)
                         }
                     }
                 },
@@ -129,7 +127,6 @@ fun AppSelectorSheet(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Filter Chips & Quick Select Buttons with min touch target >= 48dp
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -175,7 +172,6 @@ fun AppSelectorSheet(
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = BorderDark, thickness = 1.dp)
 
-            // App List
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -214,7 +210,6 @@ private fun AppItemRow(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // App Icon rendered directly from scaled bitmap (zero GC jank)
         if (app.iconBitmap != null) {
             Image(
                 bitmap = app.iconBitmap.asImageBitmap(),
@@ -237,7 +232,6 @@ private fun AppItemRow(
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        // Titles
         Column(
             modifier = Modifier.weight(1f)
         ) {
@@ -262,7 +256,7 @@ private fun AppItemRow(
 
         Switch(
             checked = isSelected,
-            onCheckedChange = null, // handled by Row toggleable for accessibility
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = TextPrimary,
                 checkedTrackColor = AccentCyan,
