@@ -108,21 +108,48 @@ class LocalProxyService : Service() {
                     serverSocket?.close()
                 } catch (_: Exception) {}
 
-                val server = ServerSocket()
-                server.reuseAddress = true
-                server.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), config.localListenPort), 50)
+                val candidatePorts = linkedSetOf(
+                    config.localListenPort,
+                    10809,
+                    10810,
+                    10811,
+                    20808,
+                    30808,
+                    0
+                )
+
+                var server: ServerSocket? = null
+                var actualPort = config.localListenPort
+                val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+
+                for (p in candidatePorts) {
+                    try {
+                        val s = ServerSocket()
+                        s.reuseAddress = true
+                        s.bind(InetSocketAddress(loopback, p), 50)
+                        server = s
+                        actualPort = s.localPort
+                        break
+                    } catch (_: Exception) {}
+                }
+
+                if (server == null) {
+                    throw java.net.BindException("Все порты локального прокси заняты")
+                }
                 serverSocket = server
 
                 val startTime = System.currentTimeMillis()
+                val portNote = if (actualPort != config.localListenPort) " (порт ${config.localListenPort} занят)" else ""
                 updateStatus(
                     TunnelStatus(
                         state = TunnelState.CONNECTED,
-                        message = "127.0.0.1:${config.localListenPort} -> ${profile.host}:${profile.port}",
-                        connectedAtMillis = startTime
+                        message = "127.0.0.1:$actualPort$portNote -> ${profile.host}:${profile.port}",
+                        connectedAtMillis = startTime,
+                        boundPort = actualPort
                     )
                 )
 
-                safeStartForeground(buildNotification(config))
+                safeStartForeground(buildNotification(config, actualPort))
                 launch { monitorStatsLoop() }
 
                 while (isActive && serverSocket?.isClosed == false) {
@@ -138,7 +165,7 @@ class LocalProxyService : Service() {
             } catch (e: Exception) {
                 if (isActive) {
                     Log.e(TAG, "Ошибка локального прокси-сервера", e)
-                    updateStatus(TunnelStatus(TunnelState.ERROR, "Порт ${config.localListenPort} недоступен: ${e.localizedMessage ?: e.message}"))
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Порт недоступен: ${e.localizedMessage ?: e.message}"))
                     stopProxyServer()
                 }
             }
@@ -374,7 +401,7 @@ class LocalProxyService : Service() {
         }
     }
 
-    private fun buildNotification(config: ProxyConfig): Notification {
+    private fun buildNotification(config: ProxyConfig, port: Int = config.localListenPort): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -394,7 +421,7 @@ class LocalProxyService : Service() {
         return NotificationCompat.Builder(this, Socks5App.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_proxy)
             .setContentTitle("SOCKS5 Прокси активен (Без VPN)")
-            .setContentText("127.0.0.1:${config.localListenPort} • Трафик идет через текущий VPN")
+            .setContentText("127.0.0.1:$port • Трафик идет через текущий VPN")
             .setContentIntent(pendingOpen)
             .setOngoing(true)
             .addAction(R.drawable.ic_stat_proxy, getString(R.string.disconnect_action), pendingDisconnect)

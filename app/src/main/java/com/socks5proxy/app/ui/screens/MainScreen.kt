@@ -337,6 +337,29 @@ fun MainScreen(
                         )
                     }
 
+                    val isVpnActive = remember(tunnelStatus.state) { com.socks5proxy.app.network.VpnDetector.isExternalVpnActive(context) }
+                    if (isVpnActive) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x1F22C55E))
+                                .border(1.dp, StatusGreen, RoundedCornerShape(8.dp))
+                                .padding(10.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.VpnKey, contentDescription = null, tint = StatusGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Обнаружен активный сторонний VPN. Трафик пойдет через него в SOCKS5 без сброса соединения.",
+                                    color = StatusGreen,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
                     Text(
                         text = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY)
                             "В режиме «Без сброса VPN» приложение не занимает системный слот VPN. Ваш текущий VPN продолжает работать, а трафик в прокси идет через него."
@@ -600,11 +623,12 @@ fun MainScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
 
+                                val actualPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else config.localListenPort
                                 val isTelegramSelected = config.allowedApps.any { it.contains("telegram", ignoreCase = true) }
 
                                 Button(
                                     onClick = {
-                                        val tgUri = Uri.parse("tg://socks?server=127.0.0.1&port=${config.localListenPort}")
+                                        val tgUri = Uri.parse("tg://socks?server=127.0.0.1&port=$actualPort")
                                         val intent = Intent(Intent.ACTION_VIEW, tgUri).apply {
                                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                         }
@@ -613,7 +637,7 @@ fun MainScreen(
                                         } catch (_: Exception) {
                                             val webIntent = Intent(
                                                 Intent.ACTION_VIEW,
-                                                Uri.parse("https://t.me/socks?server=127.0.0.1&port=${config.localListenPort}")
+                                                Uri.parse("https://t.me/socks?server=127.0.0.1&port=$actualPort")
                                             ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
                                             context.startActivity(webIntent)
                                         }
@@ -632,7 +656,7 @@ fun MainScreen(
 
                                 OutlinedButton(
                                     onClick = {
-                                        clipboardManager.setText(AnnotatedString("127.0.0.1:${config.localListenPort}"))
+                                        clipboardManager.setText(AnnotatedString("127.0.0.1:$actualPort"))
                                         isProxyCopied = true
                                         coroutineScope.launch {
                                             delay(2000)
@@ -655,7 +679,7 @@ fun MainScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = if (isProxyCopied) "Скопировано: 127.0.0.1:${config.localListenPort}" else "Скопировать адрес для браузера (127.0.0.1:${config.localListenPort})",
+                                        text = if (isProxyCopied) "Скопировано: 127.0.0.1:$actualPort" else "Скопировать адрес для браузера (127.0.0.1:$actualPort)",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
                                     )

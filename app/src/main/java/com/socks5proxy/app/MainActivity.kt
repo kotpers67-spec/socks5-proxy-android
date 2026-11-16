@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.socks5proxy.app.model.ProxyEngineMode
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.network.VpnDetector
 import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.ui.MainViewModel
@@ -63,7 +64,13 @@ class MainActivity : ComponentActivity() {
                             if (!active.isValid) {
                                 viewModel.openEditProfile(active)
                             } else {
-                                if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                                val isVpnActive = VpnDetector.isExternalVpnActive(this@MainActivity)
+                                if (isVpnActive && uiState.config.engineMode == ProxyEngineMode.SYSTEM_VPN) {
+                                    viewModel.setEngineMode(ProxyEngineMode.LOCAL_PROXY)
+                                    Toast.makeText(this@MainActivity, "Обнаружен активный VPN: активирован режим «Без сброса VPN»", Toast.LENGTH_SHORT).show()
+                                    Socks5VpnService.stop(this@MainActivity)
+                                    LocalProxyService.start(this@MainActivity)
+                                } else if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
                                     Socks5VpnService.stop(this@MainActivity)
                                     LocalProxyService.start(this@MainActivity)
                                 } else {

@@ -12,7 +12,8 @@ data class TunnelStatus(
     val message: String? = null,
     val bytesIn: Long = 0L,
     val bytesOut: Long = 0L,
-    val connectedAtMillis: Long = 0L
+    val connectedAtMillis: Long = 0L,
+    val boundPort: Int = 0
 ) {
     val isRunning: Boolean
         get() = state == TunnelState.CONNECTED || state == TunnelState.CONNECTING
