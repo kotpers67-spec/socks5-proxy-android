@@ -5,10 +5,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.socks5proxy.app.MainActivity
 import com.socks5proxy.app.R
 import com.socks5proxy.app.Socks5App
@@ -42,11 +44,12 @@ class LocalProxyService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
+        val prefs = ProxyPreferences(this)
+        val config = prefs.loadConfig()
 
         when (action) {
             ACTION_START -> {
-                val prefs = ProxyPreferences(this)
-                val config = prefs.loadConfig()
+                safeStartForeground(buildNotification(config))
                 startProxyServer(config)
             }
             ACTION_STOP -> {
@@ -57,11 +60,30 @@ class LocalProxyService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun safeStartForeground(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                } else {
+                    0
+                }
+                ServiceCompat.startForeground(this, Socks5App.NOTIFICATION_ID, notification, fgsType)
+            } else {
+                startForeground(Socks5App.NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка safeStartForeground: ${e.message}")
+            try {
+                startForeground(Socks5App.NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun startProxyServer(config: ProxyConfig) {
         val profile = config.activeProfile
         if (!profile.isValid) {
-            updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры выбранного прокси"))
-            stopSelf()
+            updateStatus(TunnelStatus(TunnelState.ERROR, "Укажите параметры прокси в настройках"))
             return
         }
 
@@ -69,22 +91,34 @@ class LocalProxyService : Service() {
 
         serviceScope.launch {
             try {
-                serverSocket = ServerSocket(config.localListenPort, 50, InetAddress.getByName("127.0.0.1"))
-                startForeground(Socks5App.NOTIFICATION_ID, buildNotification(config))
+                try {
+                    serverSocket?.close()
+                } catch (_: Exception) {}
+
+                val server = ServerSocket()
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), config.localListenPort), 50)
+                serverSocket = server
 
                 val startTime = System.currentTimeMillis()
                 updateStatus(
                     TunnelStatus(
                         state = TunnelState.CONNECTED,
-                        message = "Локальный прокси 127.0.0.1:${config.localListenPort} -> ${profile.host}:${profile.port}",
+                        message = "127.0.0.1:${config.localListenPort} -> ${profile.host}:${profile.port}",
                         connectedAtMillis = startTime
                     )
                 )
 
+                safeStartForeground(buildNotification(config))
+
                 launch { monitorStatsLoop() }
 
                 while (isActive && serverSocket?.isClosed == false) {
-                    val clientSocket = serverSocket?.accept() ?: break
+                    val clientSocket = try {
+                        serverSocket?.accept() ?: break
+                    } catch (_: Exception) {
+                        break
+                    }
                     launch(Dispatchers.IO) {
                         handleClientConnection(clientSocket, config)
                     }
@@ -92,8 +126,7 @@ class LocalProxyService : Service() {
             } catch (e: Exception) {
                 if (isActive) {
                     Log.e(TAG, "Ошибка локального прокси-сервера", e)
-                    updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка: ${e.localizedMessage ?: e.message}"))
-                    stopSelf()
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Не удалось открыть порт ${config.localListenPort}: ${e.localizedMessage ?: e.message}"))
                 }
             }
         }

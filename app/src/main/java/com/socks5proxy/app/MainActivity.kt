@@ -58,10 +58,15 @@ class MainActivity : ComponentActivity() {
                             LocalProxyService.stop(this@MainActivity)
                             Socks5VpnService.stop(this@MainActivity)
                         } else {
-                            if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
-                                LocalProxyService.start(this@MainActivity)
+                            val active = uiState.config.activeProfile
+                            if (!active.isValid) {
+                                viewModel.openEditProfile(active)
                             } else {
-                                prepareAndStartVpn()
+                                if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                                    LocalProxyService.start(this@MainActivity)
+                                } else {
+                                    prepareAndStartVpn()
+                                }
                             }
                         }
                     },

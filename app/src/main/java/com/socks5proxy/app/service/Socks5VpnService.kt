@@ -4,11 +4,13 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.socks5proxy.app.MainActivity
 import com.socks5proxy.app.R
 import com.socks5proxy.app.Socks5App
@@ -35,11 +37,12 @@ class Socks5VpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_CONNECT
+        val prefs = ProxyPreferences(this)
+        val config = prefs.loadConfig()
 
         when (action) {
             ACTION_CONNECT -> {
-                val prefs = ProxyPreferences(this)
-                val config = prefs.loadConfig()
+                safeStartForeground(buildNotification(config))
                 startTunnel(config)
             }
             ACTION_DISCONNECT -> {
@@ -50,17 +53,35 @@ class Socks5VpnService : VpnService() {
         return START_NOT_STICKY
     }
 
+    private fun safeStartForeground(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    0
+                }
+                ServiceCompat.startForeground(this, Socks5App.NOTIFICATION_ID, notification, fgsType)
+            } else {
+                startForeground(Socks5App.NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка safeStartForeground: ${e.message}")
+            try {
+                startForeground(Socks5App.NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun startTunnel(config: ProxyConfig) {
         val profile = config.activeProfile
         if (!profile.isValid) {
             updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры SOCKS5"))
-            stopSelf()
             return
         }
 
         if (config.isPerAppRoutingEnabled && config.allowedApps.isEmpty()) {
             updateStatus(TunnelStatus(TunnelState.ERROR, "Выберите хотя бы одно приложение для проксирования"))
-            stopSelf()
             return
         }
 
@@ -99,7 +120,7 @@ class Socks5VpnService : VpnService() {
             val pfd = builder.establish() ?: throw IllegalStateException("Не удалось создать сетевой интерфейс VpnService")
             vpnInterface = pfd
 
-            startForeground(Socks5App.NOTIFICATION_ID, buildNotification(config))
+            safeStartForeground(buildNotification(config))
             TProxyService.TProxyStartService(configFile!!.absolutePath, pfd.fd)
 
             val startTime = System.currentTimeMillis()
