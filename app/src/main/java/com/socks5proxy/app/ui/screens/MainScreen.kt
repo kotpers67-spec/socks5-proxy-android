@@ -34,9 +34,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -128,7 +130,8 @@ fun MainScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 76.dp)
+                    .statusBarsPadding()
+                    .padding(bottom = 88.dp)
             ) {
                 AppTopHeader(
                     uiState = uiState,
@@ -176,6 +179,7 @@ fun MainScreen(
                             listOf(Color.Transparent, colors.bgBase.copy(alpha = 0.95f), colors.bgBase)
                         )
                     )
+                    .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Column(
@@ -200,7 +204,8 @@ fun MainScreen(
                 message = uiState.toastMessage,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 56.dp)
+                    .statusBarsPadding()
+                    .padding(top = 16.dp)
             )
 
             if (uiState.isProfileEditorOpen && uiState.editingProfile != null) {

@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
@@ -44,14 +45,15 @@ class MainActivity : ComponentActivity() {
     ) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         requestNotificationPermission()
 
         setContent {
-            Socks5ProxyTheme {
-                val uiState by viewModel.uiState.collectAsState()
-                val tunnelStatus by viewModel.tunnelStatus.collectAsState()
+            val uiState by viewModel.uiState.collectAsState()
+            val tunnelStatus by viewModel.tunnelStatus.collectAsState()
 
+            Socks5ProxyTheme(darkTheme = uiState.isDarkTheme) {
                 MainScreen(
                     uiState = uiState,
                     tunnelStatus = tunnelStatus,
