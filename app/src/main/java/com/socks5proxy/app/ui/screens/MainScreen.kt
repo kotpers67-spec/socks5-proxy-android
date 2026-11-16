@@ -1,9 +1,15 @@
 package com.socks5proxy.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -17,12 +23,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -35,8 +45,11 @@ import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.ui.MainUiState
 import com.socks5proxy.app.ui.MainViewModel
+import com.socks5proxy.app.ui.dialogs.AppSelectorDialog
 import com.socks5proxy.app.ui.dialogs.ProfileEditorDialog
 import com.socks5proxy.app.ui.theme.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +62,14 @@ fun MainScreen(
     val scrollState = rememberScrollState()
     val config = uiState.config
     val activeProfile = config.activeProfile
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
+    var isProxyCopied by remember { mutableStateOf(false) }
+
+    val selectedAppList = remember(uiState.installedApps, config.allowedApps) {
+        uiState.installedApps.filter { config.allowedApps.contains(it.packageName) }
+    }
 
     Scaffold(
         topBar = {
@@ -105,7 +126,7 @@ fun MainScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2D1F)),
-                        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(StatusGreen))
+                        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(StatusGreen))
                     ) {
                         Column(
                             modifier = Modifier
@@ -163,7 +184,7 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
             ) {
                 Column(
                     modifier = Modifier
@@ -278,7 +299,7 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
             ) {
                 Column(
                     modifier = Modifier
@@ -332,7 +353,7 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
             ) {
                 Column(
                     modifier = Modifier
@@ -437,7 +458,219 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Маршрутизация приложений",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .toggleable(
+                                value = config.isPerAppRoutingEnabled,
+                                role = Role.Switch,
+                                onValueChange = { viewModel.togglePerAppRouting(it) }
+                            )
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("Выборочная маршрутизация (Выбор приложений)", color = TextPrimary, fontSize = 14.sp)
+                            Text("Проксировать только выбранные приложения", color = TextMuted, fontSize = 12.sp)
+                        }
+
+                        Switch(
+                            checked = config.isPerAppRoutingEnabled,
+                            onCheckedChange = null,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextPrimary,
+                                checkedTrackColor = AccentCyan,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = SurfaceCard,
+                                uncheckedBorderColor = BorderDark
+                            )
+                        )
+                    }
+
+                    if (config.isPerAppRoutingEnabled) {
+                        OutlinedButton(
+                            onClick = { viewModel.setAppSelectorVisible(true) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = SurfaceCard, contentColor = TextPrimary),
+                            border = BorderStroke(1.dp, BorderDark)
+                        ) {
+                            Icon(Icons.Default.Apps, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Выбрать приложения (${config.allowedApps.size} выбрано)", fontSize = 14.sp)
+                        }
+
+                        if (selectedAppList.isNotEmpty()) {
+                            Text(
+                                text = "Выбранные приложения (${selectedAppList.size}):",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(vertical = 2.dp)
+                            ) {
+                                items(selectedAppList, key = { it.packageName }) { app ->
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(SurfaceCard)
+                                            .border(1.dp, BorderDark, RoundedCornerShape(8.dp))
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (app.iconBitmap != null) {
+                                            Image(
+                                                bitmap = app.iconBitmap.asImageBitmap(),
+                                                contentDescription = null,
+                                                modifier = Modifier
+                                                    .size(20.dp)
+                                                    .clip(RoundedCornerShape(4.dp))
+                                            )
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(20.dp)
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color(0xFF26303D)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = app.appName.take(1).uppercase(),
+                                                    color = TextMuted,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(6.dp))
+
+                                        Text(
+                                            text = app.appName,
+                                            color = TextPrimary,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+
+                                        Spacer(modifier = Modifier.width(6.dp))
+
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Удалить",
+                                            tint = TextMuted,
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .clickable { viewModel.toggleAppSelection(app.packageName) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                            HorizontalDivider(color = BorderDark)
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Быстрое применение (Без сброса VPN):",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+
+                                val isTelegramSelected = config.allowedApps.any { it.contains("telegram", ignoreCase = true) }
+
+                                Button(
+                                    onClick = {
+                                        val tgUri = Uri.parse("tg://socks?server=127.0.0.1&port=${config.localListenPort}")
+                                        val intent = Intent(Intent.ACTION_VIEW, tgUri).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        try {
+                                            context.startActivity(intent)
+                                        } catch (_: Exception) {
+                                            val webIntent = Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse("https://t.me/socks?server=127.0.0.1&port=${config.localListenPort}")
+                                            ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+                                            context.startActivity(webIntent)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isTelegramSelected) AccentCyan else SurfaceCard,
+                                        contentColor = if (isTelegramSelected) BgDark else AccentCyan
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Применить прокси в Telegram в 1 клик", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString("127.0.0.1:${config.localListenPort}"))
+                                        isProxyCopied = true
+                                        coroutineScope.launch {
+                                            delay(2000)
+                                            isProxyCopied = false
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = SurfaceCard,
+                                        contentColor = if (isProxyCopied) StatusGreen else TextPrimary
+                                    ),
+                                    border = BorderStroke(1.dp, if (isProxyCopied) StatusGreen else BorderDark)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isProxyCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                        contentDescription = null,
+                                        tint = if (isProxyCopied) StatusGreen else AccentCyan,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isProxyCopied) "Скопировано: 127.0.0.1:${config.localListenPort}" else "Скопировать адрес для браузера (127.0.0.1:${config.localListenPort})",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
             ) {
                 Column(
                     modifier = Modifier
@@ -465,7 +698,7 @@ fun MainScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text("Прямой обход при сбое (Direct Fallback)", color = TextPrimary, fontSize = 14.sp)
                             Text("Если прокси недоступен, пускать трафик напрямую через активный интернет/VPN", color = TextMuted, fontSize = 12.sp)
                         }
@@ -498,7 +731,7 @@ fun MainScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text("Автозапуск при включении (Boot)", color = TextPrimary, fontSize = 14.sp)
                             Text("Автоматический запуск службы прокси после перезагрузки смартфона", color = TextMuted, fontSize = 12.sp)
                         }
@@ -514,55 +747,6 @@ fun MainScreen(
                                 uncheckedBorderColor = BorderDark
                             )
                         )
-                    }
-
-                    if (config.engineMode == ProxyEngineMode.SYSTEM_VPN) {
-                        HorizontalDivider(color = BorderDark)
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .toggleable(
-                                    value = config.isPerAppRoutingEnabled,
-                                    role = Role.Switch,
-                                    onValueChange = { viewModel.togglePerAppRouting(it) }
-                                )
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Выборочная маршрутизация (Split-Tunneling)", color = TextPrimary, fontSize = 14.sp)
-                                Text("Проксировать только выбранные приложения", color = TextMuted, fontSize = 12.sp)
-                            }
-
-                            Switch(
-                                checked = config.isPerAppRoutingEnabled,
-                                onCheckedChange = null,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = TextPrimary,
-                                    checkedTrackColor = AccentCyan,
-                                    uncheckedThumbColor = TextMuted,
-                                    uncheckedTrackColor = SurfaceCard,
-                                    uncheckedBorderColor = BorderDark
-                                )
-                            )
-                        }
-
-                        if (config.isPerAppRoutingEnabled) {
-                            OutlinedButton(
-                                onClick = { viewModel.setAppSelectorVisible(true) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = SurfaceCard, contentColor = TextPrimary),
-                                border = ButtonDefaults.outlinedButtonBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
-                            ) {
-                                Icon(Icons.Default.Apps, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Выбрать приложения (${config.allowedApps.size} выбрано)", fontSize = 14.sp)
-                            }
-                        }
                     }
                 }
             }
@@ -580,7 +764,7 @@ fun MainScreen(
     }
 
     if (uiState.isAppSelectorOpen) {
-        AppSelectorSheet(
+        AppSelectorDialog(
             apps = uiState.installedApps,
             selectedPackages = config.allowedApps,
             onToggleApp = { pkg -> viewModel.toggleAppSelection(pkg) },

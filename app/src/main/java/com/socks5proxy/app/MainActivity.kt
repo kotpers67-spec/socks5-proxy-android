@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
+            LocalProxyService.stop(this)
             Socks5VpnService.start(this)
         } else {
             Toast.makeText(this, "Разрешение на VPN отклонено пользователем", Toast.LENGTH_SHORT).show()
@@ -63,9 +64,16 @@ class MainActivity : ComponentActivity() {
                                 viewModel.openEditProfile(active)
                             } else {
                                 if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                                    Socks5VpnService.stop(this@MainActivity)
                                     LocalProxyService.start(this@MainActivity)
                                 } else {
-                                    prepareAndStartVpn()
+                                    if (uiState.config.isPerAppRoutingEnabled && uiState.config.allowedApps.isEmpty()) {
+                                        Toast.makeText(this@MainActivity, "Выберите приложения для проксирования", Toast.LENGTH_SHORT).show()
+                                        viewModel.setAppSelectorVisible(true)
+                                    } else {
+                                        LocalProxyService.stop(this@MainActivity)
+                                        prepareAndStartVpn()
+                                    }
                                 }
                             }
                         }
@@ -86,11 +94,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun prepareAndStartVpn() {
-        val vpnIntent = VpnService.prepare(this)
-        if (vpnIntent != null) {
-            vpnPrepareLauncher.launch(vpnIntent)
-        } else {
-            Socks5VpnService.start(this)
+        try {
+            val vpnIntent = VpnService.prepare(this)
+            if (vpnIntent != null) {
+                vpnPrepareLauncher.launch(vpnIntent)
+            } else {
+                Socks5VpnService.start(this)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Не удалось инициализировать VPN: ${e.message}", Toast.LENGTH_SHORT).show()
+            Socks5VpnService.updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка инициализации VPN: ${e.message}"))
         }
     }
 }

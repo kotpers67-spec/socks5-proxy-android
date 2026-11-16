@@ -49,7 +49,18 @@ class LocalProxyService : Service() {
 
         when (action) {
             ACTION_START -> {
-                safeStartForeground(buildNotification(config))
+                val profile = config.activeProfile
+                if (!profile.isValid) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Укажите параметры прокси в настройках"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val notification = buildNotification(config)
+                if (!safeStartForeground(notification)) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Не удалось запустить фоновую службу"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 startProxyServer(config)
             }
             ACTION_STOP -> {
@@ -60,11 +71,11 @@ class LocalProxyService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun safeStartForeground(notification: Notification) {
-        try {
+    private fun safeStartForeground(notification: Notification): Boolean {
+        return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 } else {
                     0
                 }
@@ -72,20 +83,22 @@ class LocalProxyService : Service() {
             } else {
                 startForeground(Socks5App.NOTIFICATION_ID, notification)
             }
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка safeStartForeground: ${e.message}")
             try {
                 startForeground(Socks5App.NOTIFICATION_ID, notification)
-            } catch (_: Exception) {}
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 
     private fun startProxyServer(config: ProxyConfig) {
         val profile = config.activeProfile
-        if (!profile.isValid) {
-            updateStatus(TunnelStatus(TunnelState.ERROR, "Укажите параметры прокси в настройках"))
-            return
-        }
+        totalRxBytes.set(0L)
+        totalTxBytes.set(0L)
 
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Запуск локального прокси на порту ${config.localListenPort}..."))
 
@@ -110,7 +123,6 @@ class LocalProxyService : Service() {
                 )
 
                 safeStartForeground(buildNotification(config))
-
                 launch { monitorStatsLoop() }
 
                 while (isActive && serverSocket?.isClosed == false) {
@@ -126,7 +138,8 @@ class LocalProxyService : Service() {
             } catch (e: Exception) {
                 if (isActive) {
                     Log.e(TAG, "Ошибка локального прокси-сервера", e)
-                    updateStatus(TunnelStatus(TunnelState.ERROR, "Не удалось открыть порт ${config.localListenPort}: ${e.localizedMessage ?: e.message}"))
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Порт ${config.localListenPort} недоступен: ${e.localizedMessage ?: e.message}"))
+                    stopProxyServer()
                 }
             }
         }
@@ -148,6 +161,10 @@ class LocalProxyService : Service() {
             }
 
             val nMethods = clientIn.read()
+            if (nMethods <= 0) {
+                clientSocket.close()
+                return
+            }
             val methods = ByteArray(nMethods)
             clientIn.read(methods)
 
@@ -175,6 +192,10 @@ class LocalProxyService : Service() {
                 }
                 0x03 -> {
                     val len = clientIn.read()
+                    if (len <= 0) {
+                        clientSocket.close()
+                        return
+                    }
                     val domainBytes = ByteArray(len)
                     clientIn.read(domainBytes)
                     targetHost = String(domainBytes, Charsets.UTF_8)
@@ -209,12 +230,25 @@ class LocalProxyService : Service() {
             clientSocket.soTimeout = 0
             remoteSocket.soTimeout = 0
 
+            val client = clientSocket
+            val remote = remoteSocket
+
             coroutineScope {
                 launch(Dispatchers.IO) {
-                    pipeData(clientSocket.getInputStream(), remoteSocket.getOutputStream(), totalRxBytes)
+                    try {
+                        pipeData(client.getInputStream(), remote.getOutputStream(), totalRxBytes)
+                    } finally {
+                        runCatching { remote.close() }
+                        runCatching { client.close() }
+                    }
                 }
                 launch(Dispatchers.IO) {
-                    pipeData(remoteSocket.getInputStream(), clientSocket.getOutputStream(), totalTxBytes)
+                    try {
+                        pipeData(remote.getInputStream(), client.getOutputStream(), totalTxBytes)
+                    } finally {
+                        runCatching { client.close() }
+                        runCatching { remote.close() }
+                    }
                 }
             }
 
@@ -231,8 +265,9 @@ class LocalProxyService : Service() {
         targetPort: Int,
         allowFallback: Boolean
     ): Socket? {
+        var sock: Socket? = null
         try {
-            val sock = Socket()
+            sock = Socket()
             sock.tcpNoDelay = true
             sock.connect(InetSocketAddress(profile.host.trim(), profile.port), 5000)
 
@@ -299,6 +334,7 @@ class LocalProxyService : Service() {
 
             return sock
         } catch (e: Exception) {
+            runCatching { sock?.close() }
             if (allowFallback) {
                 return try {
                     val direct = Socket()
@@ -372,7 +408,7 @@ class LocalProxyService : Service() {
         } catch (_: Exception) {}
         serverSocket = null
 
-        serviceJob.cancel()
+        serviceJob.cancelChildren()
         updateStatus(TunnelStatus(TunnelState.DISCONNECTED, "Прокси отключен"))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -380,6 +416,7 @@ class LocalProxyService : Service() {
 
     override fun onDestroy() {
         stopProxyServer()
+        serviceJob.cancel()
         super.onDestroy()
     }
 
@@ -396,21 +433,30 @@ class LocalProxyService : Service() {
         }
 
         fun start(context: Context) {
-            val intent = Intent(context, LocalProxyService::class.java).apply {
-                action = ACTION_START
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, LocalProxyService::class.java).apply {
+                    action = ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Не удалось запустить LocalProxyService", e)
+                updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка запуска службы: ${e.message}"))
             }
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, LocalProxyService::class.java).apply {
-                action = ACTION_STOP
+            try {
+                val intent = Intent(context, LocalProxyService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Не удалось остановить LocalProxyService", e)
             }
-            context.startService(intent)
         }
     }
 }

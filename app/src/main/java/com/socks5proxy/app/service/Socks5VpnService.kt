@@ -32,6 +32,7 @@ class Socks5VpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var configFile: File? = null
     private var statsJob: Job? = null
+    private var isHevRunning = false
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
@@ -42,7 +43,23 @@ class Socks5VpnService : VpnService() {
 
         when (action) {
             ACTION_CONNECT -> {
-                safeStartForeground(buildNotification(config))
+                val profile = config.activeProfile
+                if (!profile.isValid) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры SOCKS5"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (config.isPerAppRoutingEnabled && config.allowedApps.isEmpty()) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Выберите приложения для проксирования"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val notification = buildNotification(config)
+                if (!safeStartForeground(notification)) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Не удалось запустить фоновую службу VPN"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 startTunnel(config)
             }
             ACTION_DISCONNECT -> {
@@ -53,8 +70,8 @@ class Socks5VpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun safeStartForeground(notification: Notification) {
-        try {
+    private fun safeStartForeground(notification: Notification): Boolean {
+        return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
@@ -65,29 +82,24 @@ class Socks5VpnService : VpnService() {
             } else {
                 startForeground(Socks5App.NOTIFICATION_ID, notification)
             }
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка safeStartForeground: ${e.message}")
             try {
                 startForeground(Socks5App.NOTIFICATION_ID, notification)
-            } catch (_: Exception) {}
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 
     private fun startTunnel(config: ProxyConfig) {
         val profile = config.activeProfile
-        if (!profile.isValid) {
-            updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры SOCKS5"))
-            return
-        }
-
-        if (config.isPerAppRoutingEnabled && config.allowedApps.isEmpty()) {
-            updateStatus(TunnelStatus(TunnelState.ERROR, "Выберите хотя бы одно приложение для проксирования"))
-            return
-        }
-
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Установка соединения..."))
 
         try {
+            cleanup()
             configFile = createHevConfigFile(config)
 
             val builder = Builder()
@@ -99,12 +111,10 @@ class Socks5VpnService : VpnService() {
                 .addRoute("0.0.0.0", 0)
 
             if (config.isPerAppRoutingEnabled) {
-                var addedCount = 0
                 val safeApps = config.allowedApps.filter { it != packageName }
                 for (pkg in safeApps) {
                     try {
                         builder.addAllowedApplication(pkg)
-                        addedCount++
                     } catch (e: Exception) {
                         Log.w(TAG, "Пропуск пакета $pkg: ${e.message}")
                     }
@@ -122,6 +132,7 @@ class Socks5VpnService : VpnService() {
 
             safeStartForeground(buildNotification(config))
             TProxyService.TProxyStartService(configFile!!.absolutePath, pfd.fd)
+            isHevRunning = true
 
             val startTime = System.currentTimeMillis()
             updateStatus(
@@ -138,6 +149,7 @@ class Socks5VpnService : VpnService() {
             Log.e(TAG, "Ошибка запуска SOCKS5 туннеля", e)
             updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка: ${e.localizedMessage ?: e.message}"))
             cleanup()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
@@ -254,10 +266,13 @@ misc:
         statsJob?.cancel()
         statsJob = null
 
-        try {
-            TProxyService.TProxyStopService()
-        } catch (e: Exception) {
-            Log.w(TAG, "Ошибка остановки hev-socks5: ${e.message}")
+        if (isHevRunning) {
+            isHevRunning = false
+            try {
+                TProxyService.TProxyStopService()
+            } catch (e: Exception) {
+                Log.w(TAG, "Ошибка остановки hev-socks5: ${e.message}")
+            }
         }
 
         try {
@@ -297,6 +312,8 @@ misc:
     override fun onRevoke() {
         cleanup()
         updateStatus(TunnelStatus(TunnelState.DISCONNECTED, "VPN соединение отозвано системой"))
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
         super.onRevoke()
     }
 
@@ -313,21 +330,30 @@ misc:
         }
 
         fun start(context: Context) {
-            val intent = Intent(context, Socks5VpnService::class.java).apply {
-                action = ACTION_CONNECT
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, Socks5VpnService::class.java).apply {
+                    action = ACTION_CONNECT
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Не удалось запустить Socks5VpnService", e)
+                updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка запуска службы: ${e.message}"))
             }
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, Socks5VpnService::class.java).apply {
-                action = ACTION_DISCONNECT
+            try {
+                val intent = Intent(context, Socks5VpnService::class.java).apply {
+                    action = ACTION_DISCONNECT
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Не удалось остановить Socks5VpnService", e)
             }
-            context.startService(intent)
         }
     }
 }
