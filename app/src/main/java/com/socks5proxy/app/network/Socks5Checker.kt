@@ -1,6 +1,6 @@
 package com.socks5proxy.app.network
 
-import com.socks5proxy.app.model.ProxyConfig
+import com.socks5proxy.app.model.ProxyProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,13 +25,13 @@ object Socks5Checker {
     private const val AUTH_SUBNEGOTIATION_VER = 0x01
     private const val AUTH_STATUS_SUCCESS = 0x00
 
-    suspend fun checkConnection(config: ProxyConfig, timeoutMs: Int = 4000): PingResult = withContext(Dispatchers.IO) {
+    suspend fun checkConnection(profile: ProxyProfile, timeoutMs: Int = 4000): PingResult = withContext(Dispatchers.IO) {
         val startNano = System.nanoTime()
         var socket: Socket? = null
 
         try {
             val inetAddress = withTimeout(timeoutMs.toLong()) {
-                InetAddress.getByName(config.host.trim())
+                InetAddress.getByName(profile.host.trim())
             }
 
             socket = Socket().apply {
@@ -41,12 +41,12 @@ object Socks5Checker {
                 soTimeout = timeoutMs
             }
 
-            val socketAddress = InetSocketAddress(inetAddress, config.port)
+            val socketAddress = InetSocketAddress(inetAddress, profile.port)
             socket.connect(socketAddress, timeoutMs)
 
             val out: OutputStream = socket.getOutputStream()
             val input: InputStream = socket.getInputStream()
-            val hasAuth = config.username.isNotEmpty()
+            val hasAuth = profile.username.isNotEmpty()
 
             if (hasAuth) {
                 out.write(byteArrayOf(SOCKS_VERSION_5.toByte(), 0x02, METHOD_NO_AUTH.toByte(), METHOD_USER_PASS.toByte()))
@@ -76,8 +76,8 @@ object Socks5Checker {
                     return@withContext PingResult(false, 0, "Сервер требует авторизацию (логин и пароль)")
                 }
 
-                val uBytes = config.username.toByteArray(Charsets.UTF_8)
-                val pBytes = config.password.toByteArray(Charsets.UTF_8)
+                val uBytes = profile.username.toByteArray(Charsets.UTF_8)
+                val pBytes = profile.password.toByteArray(Charsets.UTF_8)
 
                 if (uBytes.size !in 1..255 || pBytes.size !in 1..255) {
                     return@withContext PingResult(false, 0, "Длина логина или пароля превышает лимит RFC 1929 (255 байт)")

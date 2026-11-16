@@ -8,7 +8,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -26,16 +25,17 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.socks5proxy.app.model.ProxyEngineMode
+import com.socks5proxy.app.model.ProxyProfile
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.ui.MainUiState
 import com.socks5proxy.app.ui.MainViewModel
+import com.socks5proxy.app.ui.dialogs.ProfileEditorDialog
 import com.socks5proxy.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,7 +48,7 @@ fun MainScreen(
 ) {
     val scrollState = rememberScrollState()
     val config = uiState.config
-    var passwordVisible by remember { mutableStateOf(false) }
+    val activeProfile = config.activeProfile
 
     Scaffold(
         topBar = {
@@ -65,16 +65,25 @@ fun MainScreen(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceCard)
+                                .background(if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) Color(0x3322C55E) else SurfaceCard)
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = "Split-Tunnel",
-                                color = AccentCyan,
+                                text = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) "Без сброса VPN" else "VPN Режим",
+                                color = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) StatusGreen else AccentCyan,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.checkForUpdates() }) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Проверить обновления",
+                            tint = TextSecondary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDark)
@@ -90,6 +99,66 @@ fun MainScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            uiState.updateInfo?.let { update ->
+                if (update.hasUpdate) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2D1F)),
+                        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(StatusGreen))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Download, contentDescription = null, tint = StatusGreen, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Новая версия: v${update.latestVersion}",
+                                        color = TextPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                IconButton(onClick = { viewModel.dismissUpdate() }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = TextMuted)
+                                }
+                            }
+
+                            if (uiState.isDownloadingUpdate) {
+                                LinearProgressIndicator(
+                                    progress = { uiState.downloadProgress / 100f },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = StatusGreen
+                                )
+                                Text(
+                                    text = "Загрузка: ${uiState.downloadProgress}%",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                            } else {
+                                Button(
+                                    onClick = { viewModel.downloadAndInstallUpdate() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = StatusGreen, contentColor = BgDark)
+                                ) {
+                                    Text("Обновить приложение сейчас", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -110,23 +179,12 @@ fun MainScreen(
                         TunnelState.DISCONNECTED -> SurfaceCard
                     }
 
-                    val buttonSemantics = when (tunnelStatus.state) {
-                        TunnelState.CONNECTED -> "Отключить SOCKS5 прокси. Соединение активно"
-                        TunnelState.CONNECTING -> "Установка соединения. Пожалуйста, подождите"
-                        TunnelState.ERROR -> "Ошибка туннеля. Нажмите для повторного подключения"
-                        TunnelState.DISCONNECTED -> "Подключить SOCKS5 прокси"
-                    }
-
                     Box(
                         modifier = Modifier
                             .size(100.dp)
                             .clip(CircleShape)
                             .background(buttonBg)
                             .border(3.dp, if (isRunning) TextPrimary else BorderDark, CircleShape)
-                            .semantics {
-                                role = Role.Button
-                                contentDescription = buttonSemantics
-                            }
                             .clickable(enabled = config.isValid) {
                                 onToggleConnection()
                             },
@@ -226,69 +284,47 @@ fun MainScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .toggleable(
-                                value = config.isPerAppRoutingEnabled,
-                                role = Role.Switch,
-                                onValueChange = { viewModel.togglePerAppRouting(it) }
-                            )
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Маршрутизация приложений",
-                                color = TextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = if (config.isPerAppRoutingEnabled) "Прокси только для выбранных приложений" else "Весь сетевой трафик устройства через прокси",
-                                color = TextMuted,
-                                fontSize = 12.sp
-                            )
-                        }
+                    Text(
+                        text = "Режим работы прокси",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
-                        Switch(
-                            checked = config.isPerAppRoutingEnabled,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextPrimary,
-                                checkedTrackColor = AccentCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceCard,
-                                uncheckedBorderColor = BorderDark
-                            )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ModeCard(
+                            title = "Без сброса VPN",
+                            subtitle = "127.0.0.1:${config.localListenPort}",
+                            isSelected = config.engineMode == ProxyEngineMode.LOCAL_PROXY,
+                            enabled = !tunnelStatus.isRunning,
+                            modifier = Modifier.weight(1f),
+                            onClick = { viewModel.setEngineMode(ProxyEngineMode.LOCAL_PROXY) }
+                        )
+
+                        ModeCard(
+                            title = "Системный VPN",
+                            subtitle = "Перехват ОС",
+                            isSelected = config.engineMode == ProxyEngineMode.SYSTEM_VPN,
+                            enabled = !tunnelStatus.isRunning,
+                            modifier = Modifier.weight(1f),
+                            onClick = { viewModel.setEngineMode(ProxyEngineMode.SYSTEM_VPN) }
                         )
                     }
 
-                    if (config.isPerAppRoutingEnabled) {
-                        OutlinedButton(
-                            onClick = { viewModel.setAppSelectorVisible(true) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = SurfaceCard,
-                                contentColor = TextPrimary
-                            ),
-                            border = ButtonDefaults.outlinedButtonBorder().copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(BorderDark)
-                            )
-                        ) {
-                            Icon(Icons.Default.Apps, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Выбрать приложения (${config.allowedApps.size} выбрано)",
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
+                    Text(
+                        text = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY)
+                            "В режиме «Без сброса VPN» приложение не занимает системный слот VPN. Ваш текущий VPN продолжает работать, а трафик в прокси идет через него."
+                        else
+                            "В режиме «Системный VPN» приложение перехватывает сетевой трафик ОС через VpnService (может отключить другой активный VPN).",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
                 }
             }
 
@@ -304,137 +340,49 @@ fun MainScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Параметры SOCKS5 сервера",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = config.host,
-                            onValueChange = { viewModel.updateHost(it) },
-                            modifier = Modifier.weight(0.68f),
-                            label = { Text("Сервер (IP / Host)", color = TextMuted) },
-                            singleLine = true,
-                            enabled = !tunnelStatus.isRunning,
-                            shape = RoundedCornerShape(10.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AccentCyan,
-                                unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedContainerColor = SurfaceCard,
-                                unfocusedContainerColor = SurfaceCard
-                            )
-                        )
-
-                        OutlinedTextField(
-                            value = if (config.port > 0) config.port.toString() else "",
-                            onValueChange = { viewModel.updatePort(it) },
-                            modifier = Modifier.weight(0.32f),
-                            label = { Text("Порт", color = TextMuted) },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            enabled = !tunnelStatus.isRunning,
-                            shape = RoundedCornerShape(10.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AccentCyan,
-                                unfocusedBorderColor = BorderDark,
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedContainerColor = SurfaceCard,
-                                unfocusedContainerColor = SurfaceCard
-                            )
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = config.username,
-                        onValueChange = { viewModel.updateUsername(it) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Имя пользователя (опционально)", color = TextMuted) },
-                        singleLine = true,
-                        enabled = !tunnelStatus.isRunning,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentCyan,
-                            unfocusedBorderColor = BorderDark,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedContainerColor = SurfaceCard,
-                            unfocusedContainerColor = SurfaceCard
-                        )
-                    )
-
-                    OutlinedTextField(
-                        value = config.password,
-                        onValueChange = { viewModel.updatePassword(it) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Пароль (опционально)", color = TextMuted) },
-                        singleLine = true,
-                        enabled = !tunnelStatus.isRunning,
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
-                                    tint = TextMuted
-                                )
-                            }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentCyan,
-                            unfocusedBorderColor = BorderDark,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedContainerColor = SurfaceCard,
-                            unfocusedContainerColor = SurfaceCard
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .toggleable(
-                                value = config.isUdpEnabled,
-                                enabled = !tunnelStatus.isRunning,
-                                role = Role.Switch,
-                                onValueChange = { viewModel.toggleUdp(it) }
-                            )
-                            .padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Релей UDP трафика", color = TextSecondary, fontSize = 14.sp)
-                            Text("Необходимо для DNS, голосовых звонков и игр", color = TextMuted, fontSize = 12.sp)
-                        }
-                        Switch(
-                            checked = config.isUdpEnabled,
-                            onCheckedChange = null,
-                            enabled = !tunnelStatus.isRunning,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextPrimary,
-                                checkedTrackColor = AccentCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceCard,
-                                uncheckedBorderColor = BorderDark
-                            )
+                        Text(
+                            text = "Прокси-серверы (${config.profiles.size})",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
+
+                        Button(
+                            onClick = { viewModel.openAddProfile() },
+                            enabled = !tunnelStatus.isRunning,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard, contentColor = AccentCyan)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Добавить", fontSize = 12.sp)
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        config.profiles.forEach { profile ->
+                            ProfileRowItem(
+                                profile = profile,
+                                isActive = profile.id == config.activeProfileId || (config.activeProfileId.isEmpty() && profile == config.profiles.firstOrNull()),
+                                onSelect = { viewModel.selectActiveProfile(profile.id) },
+                                onEdit = { viewModel.openEditProfile(profile) },
+                                onDelete = { viewModel.deleteProfile(profile.id) },
+                                canDelete = config.profiles.size > 1,
+                                enabled = !tunnelStatus.isRunning
+                            )
+                        }
                     }
 
                     Button(
                         onClick = { viewModel.checkProxyPing() },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isCheckingPing && config.isValid,
+                        enabled = !uiState.isCheckingPing && activeProfile.isValid,
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = SurfaceCard,
@@ -448,7 +396,7 @@ fun MainScreen(
                         } else {
                             Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Проверить доступность прокси", fontSize = 13.sp)
+                            Text("Проверить доступность: ${activeProfile.name}", fontSize = 13.sp)
                         }
                     }
 
@@ -485,8 +433,150 @@ fun MainScreen(
                 }
             }
 
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "Параметры надежности",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .toggleable(
+                                value = config.isFallbackDirectEnabled,
+                                role = Role.Switch,
+                                onValueChange = { viewModel.toggleFallbackDirect(it) }
+                            )
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Прямой обход при сбое (Direct Fallback)", color = TextPrimary, fontSize = 14.sp)
+                            Text("Если прокси недоступен, пускать трафик напрямую через активный интернет/VPN", color = TextMuted, fontSize = 12.sp)
+                        }
+
+                        Switch(
+                            checked = config.isFallbackDirectEnabled,
+                            onCheckedChange = null,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextPrimary,
+                                checkedTrackColor = AccentCyan,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = SurfaceCard,
+                                uncheckedBorderColor = BorderDark
+                            )
+                        )
+                    }
+
+                    HorizontalDivider(color = BorderDark)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .toggleable(
+                                value = config.isAutoStartEnabled,
+                                role = Role.Switch,
+                                onValueChange = { viewModel.toggleAutoStart(it) }
+                            )
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Автозапуск при включении (Boot)", color = TextPrimary, fontSize = 14.sp)
+                            Text("Автоматический запуск службы прокси после перезагрузки смартфона", color = TextMuted, fontSize = 12.sp)
+                        }
+
+                        Switch(
+                            checked = config.isAutoStartEnabled,
+                            onCheckedChange = null,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextPrimary,
+                                checkedTrackColor = AccentCyan,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = SurfaceCard,
+                                uncheckedBorderColor = BorderDark
+                            )
+                        )
+                    }
+
+                    if (config.engineMode == ProxyEngineMode.SYSTEM_VPN) {
+                        HorizontalDivider(color = BorderDark)
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .toggleable(
+                                    value = config.isPerAppRoutingEnabled,
+                                    role = Role.Switch,
+                                    onValueChange = { viewModel.togglePerAppRouting(it) }
+                                )
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Выборочная маршрутизация (Split-Tunneling)", color = TextPrimary, fontSize = 14.sp)
+                                Text("Проксировать только выбранные приложения", color = TextMuted, fontSize = 12.sp)
+                            }
+
+                            Switch(
+                                checked = config.isPerAppRoutingEnabled,
+                                onCheckedChange = null,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = TextPrimary,
+                                    checkedTrackColor = AccentCyan,
+                                    uncheckedThumbColor = TextMuted,
+                                    uncheckedTrackColor = SurfaceCard,
+                                    uncheckedBorderColor = BorderDark
+                                )
+                            )
+                        }
+
+                        if (config.isPerAppRoutingEnabled) {
+                            OutlinedButton(
+                                onClick = { viewModel.setAppSelectorVisible(true) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = SurfaceCard, contentColor = TextPrimary),
+                                border = ButtonDefaults.outlinedButtonBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+                            ) {
+                                Icon(Icons.Default.Apps, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Выбрать приложения (${config.allowedApps.size} выбрано)", fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+
+    if (uiState.isProfileEditorOpen && uiState.editingProfile != null) {
+        ProfileEditorDialog(
+            profile = uiState.editingProfile,
+            onSave = { updated -> viewModel.saveProfile(updated) },
+            onDismiss = { viewModel.closeProfileEditor() }
+        )
     }
 
     if (uiState.isAppSelectorOpen) {
@@ -498,6 +588,109 @@ fun MainScreen(
             onClearAll = { viewModel.clearAllApps() },
             onDismiss = { viewModel.setAppSelectorVisible(false) }
         )
+    }
+}
+
+@Composable
+private fun ProfileRowItem(
+    profile: ProxyProfile,
+    isActive: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    canDelete: Boolean,
+    enabled: Boolean
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isActive) Color(0x1A38BDF8) else SurfaceCard)
+            .border(1.dp, if (isActive) AccentCyan else BorderDark, RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onSelect() }
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = isActive,
+                onClick = if (enabled) onSelect else null,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = AccentCyan,
+                    unselectedColor = TextMuted
+                )
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Column {
+                Text(
+                    text = profile.name,
+                    color = if (isActive) AccentCyan else TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${profile.host}:${profile.port}${if (profile.username.isNotEmpty()) " (auth)" else ""}",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Row {
+            IconButton(onClick = onEdit, enabled = enabled, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Edit, contentDescription = "Редактировать", tint = TextSecondary, modifier = Modifier.size(18.dp))
+            }
+            if (canDelete) {
+                IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = "Удалить", tint = StatusRed, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModeCard(
+    title: String,
+    subtitle: String,
+    isSelected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) Color(0x2438BDF8) else SurfaceCard)
+            .border(1.dp, if (isSelected) AccentCyan else BorderDark, RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(12.dp)
+    ) {
+        Column {
+            Text(
+                text = title,
+                color = if (isSelected) AccentCyan else TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = TextMuted,
+                fontSize = 11.sp
+            )
+        }
     }
 }
 

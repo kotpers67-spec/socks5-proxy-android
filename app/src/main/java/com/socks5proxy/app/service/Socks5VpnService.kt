@@ -51,7 +51,8 @@ class Socks5VpnService : VpnService() {
     }
 
     private fun startTunnel(config: ProxyConfig) {
-        if (!config.isValid) {
+        val profile = config.activeProfile
+        if (!profile.isValid) {
             updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры SOCKS5"))
             stopSelf()
             return
@@ -69,22 +70,12 @@ class Socks5VpnService : VpnService() {
             configFile = createHevConfigFile(config)
 
             val builder = Builder()
-                .setSession("SOCKS5: ${config.host}:${config.port}")
+                .setSession("SOCKS5: ${profile.host}:${profile.port}")
                 .setMtu(config.mtu)
                 .addAddress("198.18.0.1", 24)
                 .addDnsServer(config.primaryDns)
                 .addDnsServer(config.secondaryDns)
                 .addRoute("0.0.0.0", 0)
-
-            if (config.isIpv6Enabled) {
-                try {
-                    builder.addAddress("fc00::2", 128)
-                    builder.addDnsServer("2606:4700:4700::1111")
-                    builder.addRoute("::", 0)
-                } catch (e: Exception) {
-                    Log.w(TAG, "IPv6 не поддерживается: ${e.message}")
-                }
-            }
 
             if (config.isPerAppRoutingEnabled) {
                 var addedCount = 0
@@ -115,7 +106,7 @@ class Socks5VpnService : VpnService() {
             updateStatus(
                 TunnelStatus(
                     state = TunnelState.CONNECTED,
-                    message = "Подключено к ${config.host}:${config.port}",
+                    message = "Подключено к ${profile.host}:${profile.port}",
                     connectedAtMillis = startTime
                 )
             )
@@ -157,10 +148,11 @@ class Socks5VpnService : VpnService() {
 
     private fun createHevConfigFile(config: ProxyConfig): File {
         val file = File(cacheDir, "hev_tunnel_config.yml")
+        val profile = config.activeProfile
 
-        val cleanUser = config.username.replace("\r", "").replace("\n", "").replace("'", "''")
-        val cleanPass = config.password.replace("\r", "").replace("\n", "").replace("'", "''")
-        val cleanHost = config.host.trim().replace("\r", "").replace("\n", "").replace("'", "''")
+        val cleanUser = profile.username.replace("\r", "").replace("\n", "").replace("'", "''")
+        val cleanPass = profile.password.replace("\r", "").replace("\n", "").replace("'", "''")
+        val cleanHost = profile.host.trim().replace("\r", "").replace("\n", "").replace("'", "''")
 
         val authYaml = if (cleanUser.isNotBlank()) {
             """
@@ -169,17 +161,15 @@ class Socks5VpnService : VpnService() {
             """.trimIndent()
         } else ""
 
-        val udpMode = if (config.isUdpEnabled) "udp" else "none"
-        val ipv6Block = if (config.isIpv6Enabled) "  ipv6: 'fc00::1'\n" else ""
+        val udpMode = if (profile.isUdpEnabled) "udp" else "none"
 
         val yamlContent = """
 tunnel:
   name: tun0
   mtu: ${config.mtu}
   ipv4: 198.18.0.1
-$ipv6Block
 socks5:
-  port: ${config.port}
+  port: ${profile.port}
   address: '$cleanHost'
   udp: '$udpMode'
 $authYaml
@@ -197,6 +187,7 @@ misc:
     }
 
     private fun buildNotification(config: ProxyConfig): Notification {
+        val profile = config.activeProfile
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -222,7 +213,7 @@ misc:
         return NotificationCompat.Builder(this, Socks5App.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_proxy)
             .setContentTitle("SOCKS5 прокси активен")
-            .setContentText("${config.host}:${config.port} • $subtext")
+            .setContentText("${profile.host}:${profile.port} • $subtext")
             .setSubText(subtext)
             .setContentIntent(pendingOpen)
             .setOngoing(true)

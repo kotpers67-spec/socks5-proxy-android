@@ -13,8 +13,10 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import com.socks5proxy.app.model.ProxyEngineMode
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.ui.MainViewModel
 import com.socks5proxy.app.ui.screens.MainScreen
@@ -28,7 +30,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            startVpnTunnel()
+            Socks5VpnService.start(this)
         } else {
             Toast.makeText(this, "Разрешение на VPN отклонено пользователем", Toast.LENGTH_SHORT).show()
             Socks5VpnService.updateStatus(TunnelStatus(TunnelState.DISCONNECTED, "Разрешение VPN отклонено"))
@@ -53,9 +55,14 @@ class MainActivity : ComponentActivity() {
                     tunnelStatus = tunnelStatus,
                     onToggleConnection = {
                         if (tunnelStatus.isRunning) {
+                            LocalProxyService.stop(this@MainActivity)
                             Socks5VpnService.stop(this@MainActivity)
                         } else {
-                            prepareAndStartVpn()
+                            if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                                LocalProxyService.start(this@MainActivity)
+                            } else {
+                                prepareAndStartVpn()
+                            }
                         }
                     },
                     viewModel = viewModel
@@ -78,11 +85,7 @@ class MainActivity : ComponentActivity() {
         if (vpnIntent != null) {
             vpnPrepareLauncher.launch(vpnIntent)
         } else {
-            startVpnTunnel()
+            Socks5VpnService.start(this)
         }
-    }
-
-    private fun startVpnTunnel() {
-        Socks5VpnService.start(this)
     }
 }
