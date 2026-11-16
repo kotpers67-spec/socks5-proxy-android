@@ -18,6 +18,8 @@ import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.util.BufferPool
+import com.socks5proxy.app.util.ScreenStateMonitor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,12 @@ class LocalProxyService : Service() {
 
     private val totalRxBytes = AtomicLong(0L)
     private val totalTxBytes = AtomicLong(0L)
+    private var screenMonitor: ScreenStateMonitor? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        screenMonitor = ScreenStateMonitor(this)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -377,25 +385,51 @@ class LocalProxyService : Service() {
     }
 
     private fun pipeData(input: InputStream, output: OutputStream, counter: AtomicLong) {
-        val buffer = ByteArray(8192)
-        try {
-            var read: Int
-            while (input.read(buffer).also { read = it } != -1) {
-                output.write(buffer, 0, read)
-                output.flush()
-                counter.addAndGet(read.toLong())
-            }
-        } catch (_: Exception) {}
+        BufferPool.useBuffer { buffer ->
+            try {
+                var read: Int
+                while (input.read(buffer).also { read = it } != -1) {
+                    output.write(buffer, 0, read)
+                    output.flush()
+                    counter.addAndGet(read.toLong())
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     private suspend fun monitorStatsLoop() = withContext(Dispatchers.IO) {
+        var lastRx = totalRxBytes.get()
+        var lastTx = totalTxBytes.get()
+        var lastTimestamp = System.currentTimeMillis()
+
         while (currentCoroutineContext().isActive) {
-            delay(1500)
-            val rx = totalRxBytes.get()
-            val tx = totalTxBytes.get()
+            val isScreenActive = screenMonitor?.awaitScreenOnOrInterval(activeIntervalMs = 1500L, idleIntervalMs = 15000L) ?: true
+
+            val now = System.currentTimeMillis()
+            val deltaMs = (now - lastTimestamp).coerceAtLeast(1L)
+            val currentRx = totalRxBytes.get()
+            val currentTx = totalTxBytes.get()
+
+            val rxSpeed = if (isScreenActive && currentRx >= lastRx) {
+                ((currentRx - lastRx) * 1000L / deltaMs).coerceAtLeast(0L)
+            } else 0L
+
+            val txSpeed = if (isScreenActive && currentTx >= lastTx) {
+                ((currentTx - lastTx) * 1000L / deltaMs).coerceAtLeast(0L)
+            } else 0L
+
+            lastRx = currentRx
+            lastTx = currentTx
+            lastTimestamp = now
+
             _statusFlow.update { current ->
-                if (current.state == TunnelState.CONNECTED && (current.bytesIn != rx || current.bytesOut != tx)) {
-                    current.copy(bytesIn = rx, bytesOut = tx)
+                if (current.state == TunnelState.CONNECTED) {
+                    current.copy(
+                        bytesIn = currentRx,
+                        bytesOut = currentTx,
+                        rxSpeedBps = rxSpeed,
+                        txSpeedBps = txSpeed
+                    )
                 } else current
             }
         }
@@ -443,6 +477,8 @@ class LocalProxyService : Service() {
 
     override fun onDestroy() {
         stopProxyServer()
+        screenMonitor?.destroy()
+        screenMonitor = null
         serviceJob.cancel()
         super.onDestroy()
     }

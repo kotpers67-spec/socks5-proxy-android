@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Socks5Proxy" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#0D1117</item>
-        <item name="android:navigationBarColor">#0D1117</item>
+        <item name="android:statusBarColor">#14161A</item>
+        <item name="android:navigationBarColor">#14161A</item>
     </style>
 </resources>

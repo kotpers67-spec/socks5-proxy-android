@@ -1,6 +1,5 @@
 package com.socks5proxy.app.ui.dialogs
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -12,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -48,7 +48,7 @@ fun ProfileEditorDialog(
                 .padding(8.dp),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BorderDark))
+            border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
         ) {
             Column(
                 modifier = Modifier
@@ -67,9 +67,9 @@ fun ProfileEditorDialog(
                     value = name,
                     onValueChange = { name = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Название (метка)", color = TextMuted) },
+                    label = { Text("Название профиля", color = TextMuted) },
                     singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = AccentCyan,
                         unfocusedBorderColor = BorderDark,
@@ -90,7 +90,8 @@ fun ProfileEditorDialog(
                         modifier = Modifier.weight(0.68f),
                         label = { Text("Хост / IP", color = TextMuted) },
                         singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
+                        textStyle = NetworkAddressStyle,
+                        shape = RoundedCornerShape(8.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
                             unfocusedBorderColor = BorderDark,
@@ -108,7 +109,8 @@ fun ProfileEditorDialog(
                         label = { Text("Порт", color = TextMuted) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
+                        textStyle = NetworkAddressStyle,
+                        shape = RoundedCornerShape(8.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
                             unfocusedBorderColor = BorderDark,
@@ -126,7 +128,7 @@ fun ProfileEditorDialog(
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Логин (опционально)", color = TextMuted) },
                     singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = AccentCyan,
                         unfocusedBorderColor = BorderDark,
@@ -153,7 +155,7 @@ fun ProfileEditorDialog(
                             )
                         }
                     },
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = AccentCyan,
                         unfocusedBorderColor = BorderDark,

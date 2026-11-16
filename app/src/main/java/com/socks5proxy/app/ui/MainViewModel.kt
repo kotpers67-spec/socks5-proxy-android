@@ -1,6 +1,8 @@
 package com.socks5proxy.app.ui
 
 import android.app.Application
+import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.socks5proxy.app.data.AppListRepository
@@ -17,9 +19,21 @@ import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.updater.UpdateInfo
 import com.socks5proxy.app.updater.UpdateService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+@Immutable
 data class MainUiState(
     val config: ProxyConfig = ProxyConfig(),
     val installedApps: List<AppInfo> = emptyList(),
@@ -31,28 +45,72 @@ data class MainUiState(
     val editingProfile: ProxyProfile? = null,
     val updateInfo: UpdateInfo? = null,
     val isDownloadingUpdate: Boolean = false,
-    val downloadProgress: Int = 0
+    val downloadProgress: Int = 0,
+    val isDarkTheme: Boolean = true,
+    val activeTab: Int = 0,
+    val toastMessage: String? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = ProxyPreferences(application)
     private val appRepo = AppListRepository(application)
+    private val sharedPrefs = application.getSharedPreferences("socks5_proxy_prefs", Context.MODE_PRIVATE)
 
-    private val _uiState = MutableStateFlow(MainUiState(config = prefs.loadConfig()))
+    private val initialDarkTheme = sharedPrefs.getBoolean("proxy_dark_theme", true)
+    private var toastJob: Job? = null
+
+    private val _uiState = MutableStateFlow(
+        MainUiState(
+            config = prefs.loadConfig(),
+            isDarkTheme = initialDarkTheme
+        )
+    )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    val tunnelStatus: StateFlow<TunnelStatus> = _uiState.flatMapLatest { state ->
-        if (state.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
-            LocalProxyService.statusFlow
-        } else {
-            Socks5VpnService.statusFlow
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TunnelStatus())
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val tunnelStatus: StateFlow<TunnelStatus> = _uiState
+        .map { it.config.engineMode }
+        .distinctUntilChanged()
+        .flatMapLatest { mode ->
+            if (mode == ProxyEngineMode.LOCAL_PROXY) {
+                LocalProxyService.statusFlow
+            } else {
+                Socks5VpnService.statusFlow
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TunnelStatus())
 
     init {
         loadInstalledApps()
         checkForUpdates()
+    }
+
+    fun setDarkTheme(isDark: Boolean) {
+        sharedPrefs.edit().putBoolean("proxy_dark_theme", isDark).apply()
+        _uiState.update { it.copy(isDarkTheme = isDark) }
+        showToast(if (isDark) "Включена тёмная тема" else "Включена светлая тема")
+    }
+
+    fun toggleDarkTheme() {
+        setDarkTheme(!_uiState.value.isDarkTheme)
+    }
+
+    fun setActiveTab(tab: Int) {
+        _uiState.update { it.copy(activeTab = tab.coerceIn(0, 2)) }
+    }
+
+    fun showToast(message: String) {
+        toastJob?.cancel()
+        _uiState.update { it.copy(toastMessage = message) }
+        toastJob = viewModelScope.launch {
+            delay(2200)
+            _uiState.update { it.copy(toastMessage = null) }
+        }
+    }
+
+    fun dismissToast() {
+        toastJob?.cancel()
+        _uiState.update { it.copy(toastMessage = null) }
     }
 
     fun loadInstalledApps() {

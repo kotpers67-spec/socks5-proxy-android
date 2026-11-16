@@ -1,42 +1,99 @@
 package com.socks5proxy.app.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.socks5proxy.app.model.ProxyEngineMode
@@ -45,13 +102,12 @@ import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.ui.MainUiState
 import com.socks5proxy.app.ui.MainViewModel
-import com.socks5proxy.app.ui.dialogs.AppSelectorDialog
-import com.socks5proxy.app.ui.dialogs.ProfileEditorDialog
-import com.socks5proxy.app.ui.theme.*
+import com.socks5proxy.app.ui.components.AppSelectorDialog
+import com.socks5proxy.app.ui.components.ProfileEditorDialog
+import com.socks5proxy.app.ui.theme.NeumorphismTheme
+import com.socks5proxy.app.ui.theme.Socks5ProxyTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     uiState: MainUiState,
@@ -59,809 +115,658 @@ fun MainScreen(
     onToggleConnection: () -> Unit,
     viewModel: MainViewModel
 ) {
-    val scrollState = rememberScrollState()
-    val config = uiState.config
-    val activeProfile = config.activeProfile
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
-    val coroutineScope = rememberCoroutineScope()
-    var isProxyCopied by remember { mutableStateOf(false) }
+    Socks5ProxyTheme(darkTheme = uiState.isDarkTheme) {
+        val colors = NeumorphismTheme.colors
+        val context = LocalContext.current
+        val scrollState = rememberScrollState()
 
-    val selectedAppList = remember(uiState.installedApps, config.allowedApps) {
-        uiState.installedApps.filter { config.allowedApps.contains(it.packageName) }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "SOCKS5 Proxy",
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            fontSize = 20.sp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) Color(0x3322C55E) else SurfaceCard)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) "Без сброса VPN" else "VPN Режим",
-                                color = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) StatusGreen else AccentCyan,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.checkForUpdates() }) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Проверить обновления",
-                            tint = TextSecondary
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDark)
-            )
-        },
-        containerColor = BgDark
-    ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .background(colors.bgOuter)
         ) {
-            uiState.updateInfo?.let { update ->
-                if (update.hasUpdate) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2D1F)),
-                        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(StatusGreen))
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Download, contentDescription = null, tint = StatusGreen, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Новая версия: v${update.latestVersion}",
-                                        color = TextPrimary,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                IconButton(onClick = { viewModel.dismissUpdate() }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = TextMuted)
-                                }
-                            }
-
-                            if (uiState.isDownloadingUpdate) {
-                                LinearProgressIndicator(
-                                    progress = { uiState.downloadProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = StatusGreen
-                                )
-                                Text(
-                                    text = "Загрузка: ${uiState.downloadProgress}%",
-                                    color = TextSecondary,
-                                    fontSize = 12.sp
-                                )
-                            } else {
-                                Button(
-                                    onClick = { viewModel.downloadAndInstallUpdate() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = StatusGreen, contentColor = BgDark)
-                                ) {
-                                    Text("Обновить приложение сейчас", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 76.dp)
             ) {
+                AppTopHeader(
+                    uiState = uiState,
+                    onToggleTheme = { viewModel.toggleDarkTheme() },
+                    onRefresh = {
+                        viewModel.checkProxyPing()
+                        viewModel.showToast("Состояние службы SOCKS5 обновлено")
+                    }
+                )
+
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val isRunning = tunnelStatus.isRunning
-                    val buttonBg = when (tunnelStatus.state) {
-                        TunnelState.CONNECTED -> StatusGreen
-                        TunnelState.CONNECTING -> StatusAmber
-                        TunnelState.ERROR -> StatusRed
-                        TunnelState.DISCONNECTED -> SurfaceCard
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(100.dp)
-                            .clip(CircleShape)
-                            .background(buttonBg)
-                            .border(3.dp, if (isRunning) TextPrimary else BorderDark, CircleShape)
-                            .clickable(enabled = config.isValid) {
-                                onToggleConnection()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (tunnelStatus.state == TunnelState.CONNECTING) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(42.dp),
-                                color = TextPrimary,
-                                strokeWidth = 3.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.PowerSettingsNew,
-                                contentDescription = null,
-                                tint = if (tunnelStatus.state == TunnelState.DISCONNECTED) TextMuted else TextPrimary,
-                                modifier = Modifier.size(46.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Text(
-                        text = when (tunnelStatus.state) {
-                            TunnelState.CONNECTED -> "АКТИВЕН"
-                            TunnelState.CONNECTING -> "ПОДКЛЮЧЕНИЕ..."
-                            TunnelState.ERROR -> "ОШИБКА"
-                            TunnelState.DISCONNECTED -> "ОТКЛЮЧЕН"
-                        },
-                        color = when (tunnelStatus.state) {
-                            TunnelState.CONNECTED -> StatusGreen
-                            TunnelState.CONNECTING -> StatusAmber
-                            TunnelState.ERROR -> StatusRed
-                            TunnelState.DISCONNECTED -> TextMuted
-                        },
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
-
-                    if (tunnelStatus.state == TunnelState.CONNECTED) {
-                        Text(
-                            text = tunnelStatus.formattedDuration(),
-                            color = TextSecondary,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-
-                    if (!tunnelStatus.message.isNullOrBlank()) {
-                        Text(
-                            text = tunnelStatus.message,
-                            color = if (tunnelStatus.state == TunnelState.ERROR) StatusRed else TextMuted,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    HorizontalDivider(color = BorderDark)
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        MetricItem(
-                            label = "Входящий (RX)",
-                            value = TunnelStatus.formatBytes(tunnelStatus.bytesIn),
-                            icon = Icons.Default.ArrowDownward
-                        )
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .height(32.dp)
-                                .background(BorderDark)
-                        )
-                        MetricItem(
-                            label = "Исходящий (TX)",
-                            value = TunnelStatus.formatBytes(tunnelStatus.bytesOut),
-                            icon = Icons.Default.ArrowUpward
-                        )
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Режим работы прокси",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ModeCard(
-                            title = "Без сброса VPN",
-                            subtitle = "127.0.0.1:${config.localListenPort}",
-                            isSelected = config.engineMode == ProxyEngineMode.LOCAL_PROXY,
-                            enabled = !tunnelStatus.isRunning,
-                            modifier = Modifier.weight(1f),
-                            onClick = { viewModel.setEngineMode(ProxyEngineMode.LOCAL_PROXY) }
-                        )
-
-                        ModeCard(
-                            title = "Системный VPN",
-                            subtitle = "Перехват ОС",
-                            isSelected = config.engineMode == ProxyEngineMode.SYSTEM_VPN,
-                            enabled = !tunnelStatus.isRunning,
-                            modifier = Modifier.weight(1f),
-                            onClick = { viewModel.setEngineMode(ProxyEngineMode.SYSTEM_VPN) }
-                        )
-                    }
-
-                    val isVpnActive = remember(tunnelStatus.state) { com.socks5proxy.app.network.VpnDetector.isExternalVpnActive(context) }
-                    if (isVpnActive) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0x1F22C55E))
-                                .border(1.dp, StatusGreen, RoundedCornerShape(8.dp))
-                                .padding(10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.VpnKey, contentDescription = null, tint = StatusGreen, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Обнаружен активный сторонний VPN. Трафик пойдет через него в SOCKS5 без сброса соединения.",
-                                    color = StatusGreen,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = if (config.engineMode == ProxyEngineMode.LOCAL_PROXY)
-                            "В режиме «Без сброса VPN» приложение не занимает системный слот VPN. Ваш текущий VPN продолжает работать, а трафик в прокси идет через него."
-                        else
-                            "В режиме «Системный VPN» приложение перехватывает сетевой трафик ОС через VpnService (может отключить другой активный VPN).",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Прокси-серверы (${config.profiles.size})",
-                            color = TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-
-                        Button(
-                            onClick = { viewModel.openAddProfile() },
-                            enabled = !tunnelStatus.isRunning,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard, contentColor = AccentCyan)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Добавить", fontSize = 12.sp)
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        config.profiles.forEach { profile ->
-                            ProfileRowItem(
-                                profile = profile,
-                                isActive = profile.id == config.activeProfileId || (config.activeProfileId.isEmpty() && profile == config.profiles.firstOrNull()),
-                                onSelect = { viewModel.selectActiveProfile(profile.id) },
-                                onEdit = { viewModel.openEditProfile(profile) },
-                                onDelete = { viewModel.deleteProfile(profile.id) },
-                                canDelete = config.profiles.size > 1,
-                                enabled = !tunnelStatus.isRunning
-                            )
-                        }
-                    }
-
-                    Button(
-                        onClick = { viewModel.checkProxyPing() },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isCheckingPing && activeProfile.isValid,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SurfaceCard,
-                            contentColor = AccentCyan
-                        )
-                    ) {
-                        if (uiState.isCheckingPing) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = AccentCyan, strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Проверка рукопожатия SOCKS5...", fontSize = 13.sp)
-                        } else {
-                            Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Проверить доступность: ${activeProfile.name}", fontSize = 13.sp)
-                        }
-                    }
-
-                    uiState.pingResult?.let { res ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (res.isSuccess) Color(0x1F22C55E) else Color(0x1FEF4444))
-                                .border(1.dp, if (res.isSuccess) StatusGreen else StatusRed, RoundedCornerShape(8.dp))
-                                .semantics {
-                                    liveRegion = LiveRegionMode.Polite
-                                    contentDescription = res.message
-                                }
-                                .padding(10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (res.isSuccess) Icons.Default.CheckCircle else Icons.Default.Error,
-                                    contentDescription = null,
-                                    tint = if (res.isSuccess) StatusGreen else StatusRed,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = res.message,
-                                    color = if (res.isSuccess) StatusGreen else StatusRed,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "Маршрутизация приложений",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .toggleable(
-                                value = config.isPerAppRoutingEnabled,
-                                role = Role.Switch,
-                                onValueChange = { viewModel.togglePerAppRouting(it) }
-                            )
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text("Выборочная маршрутизация (Выбор приложений)", color = TextPrimary, fontSize = 14.sp)
-                            Text("Проксировать только выбранные приложения", color = TextMuted, fontSize = 12.sp)
-                        }
-
-                        Switch(
-                            checked = config.isPerAppRoutingEnabled,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextPrimary,
-                                checkedTrackColor = AccentCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceCard,
-                                uncheckedBorderColor = BorderDark
-                            )
-                        )
-                    }
-
-                    if (config.isPerAppRoutingEnabled) {
-                        OutlinedButton(
-                            onClick = { viewModel.setAppSelectorVisible(true) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(containerColor = SurfaceCard, contentColor = TextPrimary),
-                            border = BorderStroke(1.dp, BorderDark)
-                        ) {
-                            Icon(Icons.Default.Apps, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Выбрать приложения (${config.allowedApps.size} выбрано)", fontSize = 14.sp)
-                        }
-
-                        if (selectedAppList.isNotEmpty()) {
-                            Text(
-                                text = "Выбранные приложения (${selectedAppList.size}):",
-                                color = TextSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-
-                            LazyRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                contentPadding = PaddingValues(vertical = 2.dp)
-                            ) {
-                                items(selectedAppList, key = { it.packageName }) { app ->
-                                    Row(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(SurfaceCard)
-                                            .border(1.dp, BorderDark, RoundedCornerShape(8.dp))
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (app.iconBitmap != null) {
-                                            Image(
-                                                bitmap = app.iconBitmap.asImageBitmap(),
-                                                contentDescription = null,
-                                                modifier = Modifier
-                                                    .size(20.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
-                                            )
-                                        } else {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(20.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(Color(0xFF26303D)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    text = app.appName.take(1).uppercase(),
-                                                    color = TextMuted,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.width(6.dp))
-
-                                        Text(
-                                            text = app.appName,
-                                            color = TextPrimary,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-
-                                        Spacer(modifier = Modifier.width(6.dp))
-
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Удалить",
-                                            tint = TextMuted,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable { viewModel.toggleAppSelection(app.packageName) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
-                            HorizontalDivider(color = BorderDark)
-
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "Быстрое применение (Без сброса VPN):",
-                                    color = TextSecondary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-
-                                val actualPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else config.localListenPort
-                                val isTelegramSelected = config.allowedApps.any { it.contains("telegram", ignoreCase = true) }
-
-                                Button(
-                                    onClick = {
-                                        val tgUri = Uri.parse("tg://socks?server=127.0.0.1&port=$actualPort")
-                                        val intent = Intent(Intent.ACTION_VIEW, tgUri).apply {
-                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        }
-                                        try {
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {
-                                            val webIntent = Intent(
-                                                Intent.ACTION_VIEW,
-                                                Uri.parse("https://t.me/socks?server=127.0.0.1&port=$actualPort")
-                                            ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-                                            context.startActivity(webIntent)
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isTelegramSelected) AccentCyan else SurfaceCard,
-                                        contentColor = if (isTelegramSelected) BgDark else AccentCyan
-                                    )
-                                ) {
-                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Применить прокси в Telegram в 1 клик", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        clipboardManager.setText(AnnotatedString("127.0.0.1:$actualPort"))
-                                        isProxyCopied = true
-                                        coroutineScope.launch {
-                                            delay(2000)
-                                            isProxyCopied = false
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = SurfaceCard,
-                                        contentColor = if (isProxyCopied) StatusGreen else TextPrimary
-                                    ),
-                                    border = BorderStroke(1.dp, if (isProxyCopied) StatusGreen else BorderDark)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isProxyCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                        contentDescription = null,
-                                        tint = if (isProxyCopied) StatusGreen else AccentCyan,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (isProxyCopied) "Скопировано: 127.0.0.1:$actualPort" else "Скопировать адрес для браузера (127.0.0.1:$actualPort)",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(BorderDark))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(
-                        text = "Параметры надежности",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .toggleable(
-                                value = config.isFallbackDirectEnabled,
-                                role = Role.Switch,
-                                onValueChange = { viewModel.toggleFallbackDirect(it) }
-                            )
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text("Прямой обход при сбое (Direct Fallback)", color = TextPrimary, fontSize = 14.sp)
-                            Text("Если прокси недоступен, пускать трафик напрямую через активный интернет/VPN", color = TextMuted, fontSize = 12.sp)
-                        }
-
-                        Switch(
-                            checked = config.isFallbackDirectEnabled,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextPrimary,
-                                checkedTrackColor = AccentCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceCard,
-                                uncheckedBorderColor = BorderDark
-                            )
+                    when (uiState.activeTab) {
+                        0 -> HomeTabContent(
+                            uiState = uiState,
+                            tunnelStatus = tunnelStatus,
+                            onToggleConnection = onToggleConnection,
+                            viewModel = viewModel,
+                            context = context
                         )
-                    }
-
-                    HorizontalDivider(color = BorderDark)
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .toggleable(
-                                value = config.isAutoStartEnabled,
-                                role = Role.Switch,
-                                onValueChange = { viewModel.toggleAutoStart(it) }
-                            )
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text("Автозапуск при включении (Boot)", color = TextPrimary, fontSize = 14.sp)
-                            Text("Автоматический запуск службы прокси после перезагрузки смартфона", color = TextMuted, fontSize = 12.sp)
-                        }
-
-                        Switch(
-                            checked = config.isAutoStartEnabled,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = TextPrimary,
-                                checkedTrackColor = AccentCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceCard,
-                                uncheckedBorderColor = BorderDark
-                            )
+                        1 -> ServersTabContent(
+                            uiState = uiState,
+                            tunnelStatus = tunnelStatus,
+                            viewModel = viewModel
+                        )
+                        2 -> SettingsTabContent(
+                            uiState = uiState,
+                            viewModel = viewModel
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, colors.bgBase.copy(alpha = 0.95f), colors.bgBase)
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    BottomNavTabs(
+                        activeTab = uiState.activeTab,
+                        onSelectTab = { viewModel.setActiveTab(it) }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(width = 110.dp, height = 3.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(colors.textMuted.copy(alpha = 0.35f))
+                    )
+                }
+            }
+
+            ToastOverlay(
+                message = uiState.toastMessage,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp)
+            )
+
+            if (uiState.isProfileEditorOpen && uiState.editingProfile != null) {
+                ProfileEditorDialog(
+                    profile = uiState.editingProfile,
+                    onSave = { viewModel.saveProfile(it) },
+                    onDismiss = { viewModel.closeProfileEditor() },
+                    onDelete = { viewModel.deleteProfile(it) }
+                )
+            }
+
+            if (uiState.isAppSelectorOpen) {
+                AppSelectorDialog(
+                    apps = uiState.installedApps,
+                    selectedPackages = uiState.config.allowedApps,
+                    onToggleApp = { viewModel.toggleAppSelection(it) },
+                    onSelectAll = { viewModel.selectAllApps() },
+                    onClearAll = { viewModel.clearAllApps() },
+                    onDismiss = { viewModel.setAppSelectorVisible(false) }
+                )
+            }
         }
-    }
-
-    if (uiState.isProfileEditorOpen && uiState.editingProfile != null) {
-        ProfileEditorDialog(
-            profile = uiState.editingProfile,
-            onSave = { updated -> viewModel.saveProfile(updated) },
-            onDismiss = { viewModel.closeProfileEditor() }
-        )
-    }
-
-    if (uiState.isAppSelectorOpen) {
-        AppSelectorDialog(
-            apps = uiState.installedApps,
-            selectedPackages = config.allowedApps,
-            onToggleApp = { pkg -> viewModel.toggleAppSelection(pkg) },
-            onSelectAll = { viewModel.selectAllApps() },
-            onClearAll = { viewModel.clearAllApps() },
-            onDismiss = { viewModel.setAppSelectorVisible(false) }
-        )
     }
 }
 
 @Composable
-private fun ProfileRowItem(
-    profile: ProxyProfile,
-    isActive: Boolean,
-    onSelect: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    canDelete: Boolean,
-    enabled: Boolean
+private fun AppTopHeader(
+    uiState: MainUiState,
+    onToggleTheme: () -> Unit,
+    onRefresh: () -> Unit
 ) {
+    val colors = NeumorphismTheme.colors
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isActive) Color(0x1A38BDF8) else SurfaceCard)
-            .border(1.dp, if (isActive) AccentCyan else BorderDark, RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled) { onSelect() }
-            .padding(12.dp),
+            .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            RadioButton(
-                selected = isActive,
-                onClick = if (enabled) onSelect else null,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = AccentCyan,
-                    unselectedColor = TextMuted
+            Text(
+                text = "SOCKS5 Proxy",
+                style = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp
                 )
             )
 
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Column {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(colors.insetBg)
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 9.dp, vertical = 4.dp)
+            ) {
                 Text(
-                    text = profile.name,
-                    color = if (isActive) AccentCyan else TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "${profile.host}:${profile.port}${if (profile.username.isNotEmpty()) " (auth)" else ""}",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    text = if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) "Без сброса VPN" else "Системный VPN",
+                    style = TextStyle(
+                        color = if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) colors.accent else colors.textPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 )
             }
         }
 
-        Row {
-            IconButton(onClick = onEdit, enabled = enabled, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Edit, contentDescription = "Редактировать", tint = TextSecondary, modifier = Modifier.size(18.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, CircleShape)
+                    .clickable(onClick = onToggleTheme),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (uiState.isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                    contentDescription = "Тема",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
             }
-            if (canDelete) {
-                IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Удалить", tint = StatusRed, modifier = Modifier.size(18.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, CircleShape)
+                    .clickable(onClick = onRefresh),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Обновить",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeTabContent(
+    uiState: MainUiState,
+    tunnelStatus: TunnelStatus,
+    onToggleConnection: () -> Unit,
+    viewModel: MainViewModel,
+    context: Context
+) {
+    val colors = NeumorphismTheme.colors
+    val activeProfile = uiState.config.activeProfile
+
+    var copiedText by remember { mutableStateOf("Скопировать адрес для браузера (127.0.0.1:${if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort})") }
+    var isCopiedActive by remember { mutableStateOf(false) }
+
+    NeumorphicCard(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            HeroPowerBezel(
+                isConnected = tunnelStatus.isRunning,
+                onClick = onToggleConnection
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = when (tunnelStatus.state) {
+                    TunnelState.CONNECTED -> "АКТИВЕН"
+                    TunnelState.CONNECTING -> "ПОДКЛЮЧЕНИЕ..."
+                    TunnelState.ERROR -> "ОШИБКА"
+                    TunnelState.DISCONNECTED -> "ОТКЛЮЧЕН"
+                },
+                style = TextStyle(
+                    color = when (tunnelStatus.state) {
+                        TunnelState.CONNECTED -> colors.accent
+                        TunnelState.CONNECTING -> colors.accentBright
+                        TunnelState.ERROR -> colors.danger
+                        TunnelState.DISCONNECTED -> colors.textMuted
+                    },
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 2.sp
+                )
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = tunnelStatus.formattedDuration(),
+                style = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.insetBg)
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Column {
+                    val portNote = if (tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort) {
+                        " (порт ${uiState.config.localListenPort} занят)"
+                    } else {
+                        ""
+                    }
+                    val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+                    Text(
+                        text = "127.0.0.1:$listenPort$portNote →",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                    Text(
+                        text = "${activeProfile.host}:${activeProfile.port}",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowDownward,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Входящий (RX)",
+                                style = TextStyle(
+                                    color = colors.textMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = tunnelStatus.formattedBytesIn(),
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Text(
+                            text = tunnelStatus.formattedRxSpeed(),
+                            style = TextStyle(
+                                color = colors.textMuted,
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowUpward,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Исходящий (TX)",
+                                style = TextStyle(
+                                    color = colors.textMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = tunnelStatus.formattedBytesOut(),
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Text(
+                            text = tunnelStatus.formattedTxSpeed(),
+                            style = TextStyle(
+                                color = colors.textMuted,
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            TrafficSparklineView(
+                isRunning = tunnelStatus.isRunning,
+                rxBytes = tunnelStatus.bytesIn
+            )
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Режим работы прокси",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.insetBg)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "SOCKS5",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+
+            SegmentedModeSelector(
+                currentMode = uiState.config.engineMode,
+                localPort = uiState.config.localListenPort,
+                onSelectMode = { viewModel.setEngineMode(it) }
+            )
+
+            AnimatedVisibility(visible = uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(colors.insetBg)
+                            .border(1.dp, colors.accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VpnKey,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .padding(top = 1.dp)
+                            )
+                            Text(
+                                text = "Обнаружен активный сторонний VPN. Трафик пойдет через него в SOCKS5 без сброса соединения.",
+                                style = TextStyle(
+                                    color = colors.accent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    lineHeight = 16.sp
+                                )
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "В режиме «Без сброса VPN» приложение не занимает системный слот VPN. Ваш текущий VPN продолжает работать, а трафик в прокси идет через него.",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp
+                        ),
+                        modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = uiState.config.engineMode == ProxyEngineMode.SYSTEM_VPN) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = colors.textSecondary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .padding(top = 1.dp)
+                        )
+                        Text(
+                            text = "Системный TUN-интерфейс перехватывает весь трафик выбранных приложений на уровне ОС Android.",
+                            style = TextStyle(
+                                color = colors.textSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Быстрое применение (Без сброса VPN):",
+                style = TextStyle(
+                    color = colors.textSecondary,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                    .clickable {
+                        val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+                        val uriStr = "tg:" + "/" + "/socks?server=127.0.0.1&port=$listenPort"
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uriStr)).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            context.startActivity(intent)
+                            viewModel.showToast("Применение $uriStr")
+                        } catch (e: Exception) {
+                            viewModel.showToast("Telegram не найден на устройстве")
+                        }
+                    }
+                    .padding(vertical = 13.dp, horizontal = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Применить прокси в Telegram в 1 клик",
+                        style = TextStyle(
+                            color = colors.accent,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                    .clickable {
+                        val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+                        val addr = "127.0.0.1:$listenPort"
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("SOCKS5 Proxy", addr))
+                        copiedText = "Скопировано: $addr"
+                        isCopiedActive = true
+                        viewModel.showToast("Адрес $addr скопирован в буфер")
+                    }
+                    .padding(vertical = 13.dp, horizontal = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        tint = if (isCopiedActive) colors.accent else colors.textMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = copiedText,
+                        style = TextStyle(
+                            color = if (isCopiedActive) colors.accent else colors.textPrimary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
                 }
             }
         }
@@ -869,58 +774,1246 @@ private fun ProfileRowItem(
 }
 
 @Composable
-private fun ModeCard(
-    title: String,
-    subtitle: String,
-    isSelected: Boolean,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+private fun ServersTabContent(
+    uiState: MainUiState,
+    tunnelStatus: TunnelStatus,
+    viewModel: MainViewModel
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isSelected) Color(0x2438BDF8) else SurfaceCard)
-            .border(1.dp, if (isSelected) AccentCyan else BorderDark, RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled) { onClick() }
-            .padding(12.dp)
-    ) {
-        Column {
+    val colors = NeumorphismTheme.colors
+    val activeProfile = uiState.config.activeProfile
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Прокси-серверы (${uiState.config.profiles.size})",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(colors.gradStart, colors.gradEnd)
+                            )
+                        )
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                        .clickable { viewModel.openAddProfile() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = colors.accent,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Добавить",
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                uiState.config.profiles.forEach { profile ->
+                    val isSelected = profile.id == uiState.config.activeProfileId ||
+                            (uiState.config.activeProfileId.isEmpty() && profile == uiState.config.profiles.firstOrNull())
+
+                    ServerItemRow(
+                        profile = profile,
+                        isSelected = isSelected,
+                        onSelect = { viewModel.selectActiveProfile(profile.id) },
+                        onEdit = { viewModel.openEditProfile(profile) }
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                    .clickable(enabled = !uiState.isCheckingPing) { viewModel.checkProxyPing() }
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (uiState.isCheckingPing) {
+                        CircularProgressIndicator(
+                            color = colors.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = null,
+                            tint = colors.accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Text(
+                        text = if (uiState.isCheckingPing) "Проверка..." else "Проверить доступность: ${activeProfile.name}",
+                        style = TextStyle(
+                            color = colors.accent,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.insetBg)
+                    .border(
+                        1.dp,
+                        if (uiState.pingResult?.isSuccess == true) colors.accent.copy(alpha = 0.35f) else colors.borderSubtle,
+                        RoundedCornerShape(12.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                uiState.pingResult == null -> Icons.Default.CheckCircle
+                                uiState.pingResult.isSuccess -> Icons.Default.CheckCircle
+                                else -> Icons.Default.ErrorOutline
+                            },
+                            contentDescription = null,
+                            tint = when {
+                                uiState.pingResult == null -> colors.accent
+                                uiState.pingResult.isSuccess -> colors.accent
+                                else -> colors.danger
+                            },
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = when {
+                                uiState.pingResult == null -> "SOCKS5 готов к проверке"
+                                uiState.pingResult.isSuccess -> "SOCKS5 доступен (${uiState.pingResult.latencyMs} мс)"
+                                else -> "Ошибка подключения (${uiState.pingResult.message})"
+                            },
+                            style = TextStyle(
+                                color = when {
+                                    uiState.pingResult == null -> colors.accent
+                                    uiState.pingResult.isSuccess -> colors.accent
+                                    else -> colors.danger
+                                },
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+
+                    Text(
+                        text = when {
+                            uiState.pingResult == null -> "READY"
+                            uiState.pingResult.isSuccess -> "TCP OK"
+                            else -> "TCP FAIL"
+                        },
+                        style = TextStyle(
+                            color = if (uiState.pingResult?.isSuccess != false) colors.accent.copy(alpha = 0.8f) else colors.danger,
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Text(
-                text = title,
-                color = if (isSelected) AccentCyan else TextPrimary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
+                text = "Локальный шлюз",
+                style = TextStyle(
+                    color = colors.textSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                modifier = Modifier.padding(bottom = 2.dp)
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                color = TextMuted,
-                fontSize = 11.sp
+
+            val boundPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+            TelemetryRow(
+                label = "Активный порт SOCKS5",
+                value = "127.0.0.1:$boundPort",
+                valueColor = colors.textPrimary
+            )
+
+            TelemetryRow(
+                label = "Основной порт (занят)",
+                value = "127.0.0.1:${uiState.config.localListenPort}",
+                valueColor = if (tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort) colors.danger else colors.textMuted
+            )
+
+            TelemetryRow(
+                label = "Аутентификация",
+                value = if (activeProfile.username.isNotEmpty()) "RFC 1929 (User/Pass)" else "Без аутентификации",
+                valueColor = colors.textSecondary
             )
         }
     }
 }
 
 @Composable
-private fun MetricItem(
-    label: String,
-    value: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(14.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(text = label, color = TextMuted, fontSize = 12.sp)
+private fun TelemetryRow(label: String, value: String, valueColor: Color) {
+    val colors = NeumorphismTheme.colors
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.insetBg)
+            .padding(horizontal = 12.dp, vertical = 9.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = TextStyle(
+                    color = colors.textMuted,
+                    fontSize = 11.5.sp
+                )
+            )
+            Text(
+                text = value,
+                style = TextStyle(
+                    color = valueColor,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold
+                )
+            )
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = value,
-            color = TextPrimary,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace
+    }
+}
+
+@Composable
+private fun ServerItemRow(
+    profile: ProxyProfile,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (isSelected) colors.insetBg else colors.bgSurface)
+            .border(
+                1.dp,
+                if (isSelected) colors.accent.copy(alpha = 0.35f) else colors.borderSubtle,
+                RoundedCornerShape(14.dp)
+            )
+            .clickable(onClick = onSelect)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(colors.insetDeepBg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(if (isSelected) 10.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(if (isSelected) colors.accentBright else colors.textMuted.copy(alpha = 0.45f))
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = profile.name,
+                        style = TextStyle(
+                            color = if (isSelected) colors.accent else colors.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${profile.host}:${profile.port}${if (profile.username.isNotEmpty()) " (auth)" else ""}",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, CircleShape)
+                    .clickable(onClick = onEdit),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Редактировать",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SettingsTabContent(
+    uiState: MainUiState,
+    viewModel: MainViewModel
+) {
+    val colors = NeumorphismTheme.colors
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Оформление интерфейса",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.insetBg)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (uiState.isDarkTheme) "Тёмная" else "Светлая",
+                        style = TextStyle(
+                            color = colors.accent,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+
+            SegmentedThemeSelector(
+                isDarkTheme = uiState.isDarkTheme,
+                onSelectDark = { viewModel.setDarkTheme(it) }
+            )
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "Маршрутизация приложений",
+                style = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Выборочная маршрутизация (Выбор приложений)",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Text(
+                        text = "Проксировать только выбранные приложения",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                NeumorphicSwitch(
+                    checked = uiState.config.isPerAppRoutingEnabled,
+                    onCheckedChange = { viewModel.togglePerAppRouting(it) }
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(if (uiState.config.isPerAppRoutingEnabled) 1f else 0.45f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                    .clickable(enabled = uiState.config.isPerAppRoutingEnabled) {
+                        viewModel.setAppSelectorVisible(true)
+                    }
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Выбрать приложения (${uiState.config.allowedApps.size} выбрано)",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+
+            if (uiState.config.isPerAppRoutingEnabled && uiState.config.allowedApps.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Выбранные приложения (${uiState.config.allowedApps.size}):",
+                        style = TextStyle(
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        uiState.config.allowedApps.forEach { pkg ->
+                            val appInfo = uiState.installedApps.find { it.packageName == pkg }
+                            val label = appInfo?.appName ?: pkg.substringAfterLast('.')
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(colors.insetBg)
+                                    .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (appInfo?.iconBitmap != null) {
+                                        Image(
+                                            bitmap = appInfo.iconBitmap.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(colors.accent.copy(alpha = 0.3f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = label.take(1).uppercase(),
+                                                style = TextStyle(
+                                                    color = colors.accent,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = label,
+                                        style = TextStyle(
+                                            color = colors.textPrimary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Удалить",
+                                        tint = colors.textMuted,
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clickable { viewModel.toggleAppSelection(pkg) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "Параметры надежности",
+                style = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Прямой обход при сбое (Direct Fallback)",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Text(
+                        text = "Если прокси недоступен, пускать трафик напрямую через активный интернет/VPN",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                NeumorphicSwitch(
+                    checked = uiState.config.isFallbackDirectEnabled,
+                    onCheckedChange = { viewModel.toggleFallbackDirect(it) }
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.dividerColor)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Автозапуск при включении (Boot)",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Text(
+                        text = "Автоматический запуск службы прокси после перезагрузки смартфона",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                NeumorphicSwitch(
+                    checked = uiState.config.isAutoStartEnabled,
+                    onCheckedChange = { viewModel.toggleAutoStart(it) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroPowerBezel(
+    isConnected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseScale1 by infiniteTransition.animateFloat(
+        initialValue = 0.88f,
+        targetValue = 1.42f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulse1"
+    )
+    val pulseAlpha1 by infiniteTransition.animateFloat(
+        initialValue = 0.65f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "alpha1"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(140.dp)
+            .clip(CircleShape)
+            .background(colors.insetDeepBg),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isConnected) {
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .scale(pulseScale1)
+                    .clip(CircleShape)
+                    .border(1.5.dp, colors.accentBright.copy(alpha = pulseAlpha1), CircleShape)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(94.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isConnected) {
+                        Brush.radialGradient(
+                            listOf(colors.gradStart, colors.bgSurface)
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    }
+                )
+                .border(
+                    if (isConnected) 2.dp else 1.dp,
+                    if (isConnected) colors.accentBright else colors.borderSubtle,
+                    CircleShape
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.PowerSettingsNew,
+                contentDescription = "Питание",
+                tint = if (isConnected) colors.accentBright else colors.textMuted,
+                modifier = Modifier.size(38.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrafficSparklineView(
+    isRunning: Boolean,
+    rxBytes: Long
+) {
+    val colors = NeumorphismTheme.colors
+    val sparklinePoints = remember { mutableStateListOf<Float>().apply { repeat(24) { add(16f) } } }
+
+    LaunchedEffect(isRunning, rxBytes) {
+        if (isRunning) {
+            val variance = (rxBytes % 12000).toFloat() / 12000f
+            val nextY = (4f + (1f - variance) * 16f).coerceIn(4f, 20f)
+            if (sparklinePoints.size >= 24) {
+                sparklinePoints.removeAt(0)
+            }
+            sparklinePoints.add(nextY)
+        } else {
+            if (sparklinePoints.size >= 24) {
+                sparklinePoints.removeAt(0)
+            }
+            sparklinePoints.add(20f)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(30.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.insetBg)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            if (sparklinePoints.size < 2) return@Canvas
+            val w = size.width
+            val h = size.height
+            val step = w / (sparklinePoints.size - 1)
+
+            val path = Path()
+            sparklinePoints.forEachIndexed { idx, pt ->
+                val x = idx * step
+                val y = (pt / 24f) * h
+                if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+
+            drawPath(
+                path = path,
+                brush = Brush.horizontalGradient(
+                    listOf(colors.accent.copy(alpha = 0.4f), colors.accentBright)
+                ),
+                style = Stroke(
+                    width = 2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun SegmentedModeSelector(
+    currentMode: ProxyEngineMode,
+    localPort: Int,
+    onSelectMode: (ProxyEngineMode) -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.insetBg)
+            .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+            .padding(4.dp)
+    ) {
+        val totalWidth = maxWidth
+        val pillWidth = totalWidth / 2
+        val pillOffset by animateDpAsState(
+            targetValue = if (currentMode == ProxyEngineMode.LOCAL_PROXY) 0.dp else pillWidth,
+            animationSpec = tween(300),
+            label = "modePill"
         )
+
+        Box(
+            modifier = Modifier
+                .offset(x = pillOffset)
+                .width(pillWidth)
+                .height(48.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(colors.gradStart, colors.gradEnd)
+                    )
+                )
+                .border(1.dp, colors.borderSubtle, RoundedCornerShape(11.dp))
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clickable { onSelectMode(ProxyEngineMode.LOCAL_PROXY) }
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Column {
+                    Text(
+                        text = "Без сброса VPN",
+                        style = TextStyle(
+                            color = if (currentMode == ProxyEngineMode.LOCAL_PROXY) colors.accent else colors.textSecondary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        text = "127.0.0.1:$localPort",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clickable { onSelectMode(ProxyEngineMode.SYSTEM_VPN) }
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Column {
+                    Text(
+                        text = "Системный VPN",
+                        style = TextStyle(
+                            color = if (currentMode == ProxyEngineMode.SYSTEM_VPN) colors.accent else colors.textSecondary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        text = "Перехват ОС",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 10.5.sp
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedThemeSelector(
+    isDarkTheme: Boolean,
+    onSelectDark: (Boolean) -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.insetBg)
+            .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+            .padding(4.dp)
+    ) {
+        val totalWidth = maxWidth
+        val pillWidth = totalWidth / 2
+        val pillOffset by animateDpAsState(
+            targetValue = if (!isDarkTheme) 0.dp else pillWidth,
+            animationSpec = tween(300),
+            label = "themePill"
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = pillOffset)
+                .width(pillWidth)
+                .height(42.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(colors.gradStart, colors.gradEnd)
+                    )
+                )
+                .border(1.dp, colors.borderSubtle, RoundedCornerShape(11.dp))
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clickable { onSelectDark(false) },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LightMode,
+                        contentDescription = null,
+                        tint = if (!isDarkTheme) colors.accent else colors.textMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Светлая",
+                        style = TextStyle(
+                            color = if (!isDarkTheme) colors.accent else colors.textSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = if (!isDarkTheme) FontWeight.Bold else FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clickable { onSelectDark(true) },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DarkMode,
+                        contentDescription = null,
+                        tint = if (isDarkTheme) colors.accent else colors.textMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Тёмная",
+                        style = TextStyle(
+                            color = if (isDarkTheme) colors.accent else colors.textSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = if (isDarkTheme) FontWeight.Bold else FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BottomNavTabs(
+    activeTab: Int,
+    onSelectTab: (Int) -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(colors.insetBg)
+            .border(1.dp, colors.borderSubtle, RoundedCornerShape(18.dp))
+            .padding(4.dp)
+    ) {
+        val tabCount = 3
+        val tabWidth = maxWidth / tabCount
+        val sliderOffset by animateDpAsState(
+            targetValue = tabWidth * activeTab,
+            animationSpec = tween(300),
+            label = "tabSlider"
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = sliderOffset)
+                .width(tabWidth)
+                .height(46.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(colors.gradStart, colors.gradEnd)
+                    )
+                )
+                .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp)
+        ) {
+            NavTabItem(
+                label = "Главная",
+                icon = Icons.Default.Security,
+                isSelected = activeTab == 0,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelectTab(0) }
+            )
+
+            NavTabItem(
+                label = "Серверы",
+                icon = Icons.Default.Dns,
+                isSelected = activeTab == 1,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelectTab(1) }
+            )
+
+            NavTabItem(
+                label = "Настройки",
+                icon = Icons.Default.Settings,
+                isSelected = activeTab == 2,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelectTab(2) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun NavTabItem(
+    label: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (isSelected) colors.accent else colors.textMuted,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = label,
+                style = TextStyle(
+                    color = if (isSelected) colors.accent else colors.textMuted,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun NeumorphicSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = NeumorphismTheme.colors
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 24.dp else 2.dp,
+        animationSpec = tween(250),
+        label = "switchThumb"
+    )
+
+    Box(
+        modifier = modifier
+            .size(width = 50.dp, height = 28.dp)
+            .clip(CircleShape)
+            .background(colors.insetDeepBg)
+            .border(
+                1.dp,
+                if (checked) colors.accent.copy(alpha = 0.35f) else colors.borderSubtle,
+                CircleShape
+            )
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 2.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    if (checked) {
+                        Brush.linearGradient(
+                            listOf(colors.accentBright, colors.accent)
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    }
+                )
+                .border(
+                    1.dp,
+                    if (checked) colors.accentBright else colors.borderSubtle,
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(if (checked) Color.White else colors.textMuted)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NeumorphicCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(colors.gradStart, colors.gradEnd)
+                )
+            )
+            .border(1.dp, colors.borderSubtle, RoundedCornerShape(22.dp))
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun ToastOverlay(
+    message: String?,
+    modifier: Modifier = Modifier
+) {
+    val colors = NeumorphismTheme.colors
+
+    AnimatedVisibility(
+        visible = message != null,
+        enter = fadeIn() + slideInVertically { -it / 2 },
+        exit = fadeOut() + slideOutVertically { -it / 2 },
+        modifier = modifier
+    ) {
+        if (message != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(colors.gradStart, colors.gradEnd)
+                        )
+                    )
+                    .border(1.dp, colors.accent.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 16.dp, vertical = 9.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(colors.accentBright)
+                    )
+                    Text(
+                        text = message,
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+            }
+        }
     }
 }

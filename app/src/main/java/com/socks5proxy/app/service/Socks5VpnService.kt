@@ -18,6 +18,7 @@ import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.util.ScreenStateMonitor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +36,12 @@ class Socks5VpnService : VpnService() {
     private var isHevRunning = false
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
+    private var screenMonitor: ScreenStateMonitor? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        screenMonitor = ScreenStateMonitor(this)
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_CONNECT
@@ -157,16 +164,42 @@ class Socks5VpnService : VpnService() {
     private fun startStatsPolling() {
         statsJob?.cancel()
         statsJob = serviceScope.launch {
+            var lastRx = 0L
+            var lastTx = 0L
+            var lastTimestamp = System.currentTimeMillis()
+
             while (isActive) {
-                delay(1500)
+                val isScreenActive = screenMonitor?.awaitScreenOnOrInterval(activeIntervalMs = 1500L, idleIntervalMs = 15000L) ?: true
+                if (!isActive) break
+
                 try {
                     val stats = TProxyService.TProxyGetStats()
                     if (stats != null && stats.size >= 2) {
+                        val now = System.currentTimeMillis()
+                        val deltaMs = (now - lastTimestamp).coerceAtLeast(1L)
                         val rx = stats[0]
                         val tx = stats[1]
+
+                        val rxSpeed = if (isScreenActive && rx >= lastRx) {
+                            ((rx - lastRx) * 1000L / deltaMs).coerceAtLeast(0L)
+                        } else 0L
+
+                        val txSpeed = if (isScreenActive && tx >= lastTx) {
+                            ((tx - lastTx) * 1000L / deltaMs).coerceAtLeast(0L)
+                        } else 0L
+
+                        lastRx = rx
+                        lastTx = tx
+                        lastTimestamp = now
+
                         _statusFlow.update { current ->
-                            if (current.state == TunnelState.CONNECTED && (current.bytesIn != rx || current.bytesOut != tx)) {
-                                current.copy(bytesIn = rx, bytesOut = tx)
+                            if (current.state == TunnelState.CONNECTED) {
+                                current.copy(
+                                    bytesIn = rx,
+                                    bytesOut = tx,
+                                    rxSpeedBps = rxSpeed,
+                                    txSpeedBps = txSpeed
+                                )
                             } else current
                         }
                     }
@@ -305,6 +338,8 @@ misc:
 
     override fun onDestroy() {
         cleanup()
+        screenMonitor?.destroy()
+        screenMonitor = null
         serviceJob.cancel()
         super.onDestroy()
     }

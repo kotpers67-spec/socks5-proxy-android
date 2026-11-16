@@ -84,6 +84,7 @@ fun AppSelectorSheet(
                     Text(
                         text = "Выбрано: ${selectedPackages.size} из ${apps.size}",
                         color = TextMuted,
+                        style = TabularNumbers,
                         fontSize = 13.sp
                     )
                 }
@@ -114,7 +115,7 @@ fun AppSelectorSheet(
                     }
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(8.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = AccentCyan,
                     unfocusedBorderColor = BorderDark,
@@ -125,7 +126,7 @@ fun AppSelectorSheet(
                 )
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -136,9 +137,10 @@ fun AppSelectorSheet(
                     selected = filterMode == 0,
                     onClick = { filterMode = 0 },
                     label = { Text("Все", fontSize = 12.sp) },
+                    shape = RoundedCornerShape(8.dp),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AccentCyanMuted,
-                        selectedLabelColor = TextPrimary,
+                        selectedContainerColor = AccentAlpha,
+                        selectedLabelColor = AccentCyan,
                         containerColor = SurfaceCard,
                         labelColor = TextSecondary
                     )
@@ -146,10 +148,17 @@ fun AppSelectorSheet(
                 FilterChip(
                     selected = filterMode == 1,
                     onClick = { filterMode = 1 },
-                    label = { Text("Выбранные (${selectedPackages.size})", fontSize = 12.sp) },
+                    label = {
+                        Text(
+                            text = "Выбранные (${selectedPackages.size})",
+                            fontSize = 12.sp,
+                            style = TabularNumbers
+                        )
+                    },
+                    shape = RoundedCornerShape(8.dp),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AccentCyanMuted,
-                        selectedLabelColor = TextPrimary,
+                        selectedContainerColor = AccentAlpha,
+                        selectedLabelColor = AccentCyan,
                         containerColor = SurfaceCard,
                         labelColor = TextSecondary
                     )
@@ -216,17 +225,22 @@ private fun AppItemRow(
                 contentDescription = null,
                 modifier = Modifier
                     .size(38.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(8.dp))
             )
         } else {
             Box(
                 modifier = Modifier
                     .size(38.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(SurfaceCard),
                 contentAlignment = Alignment.Center
             ) {
-                Text("APP", color = TextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = app.appName.take(1).uppercase(),
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
@@ -247,6 +261,7 @@ private fun AppItemRow(
                 text = app.packageName,
                 color = TextMuted,
                 fontSize = 12.sp,
+                style = NetworkAddressStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

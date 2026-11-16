@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -26,11 +25,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.socks5proxy.app.model.AppInfo
 import com.socks5proxy.app.ui.theme.*
-
-private val ColorAccent = Color(0xFF00E5FF)
-private val ColorTextPrimary = Color(0xFFFFFFFF)
-private val ColorTextSecondary = Color(0xFFE2E8F0)
-private val ColorTextMuted = Color(0xFF94A3B8)
 
 @Composable
 fun AppSelectorDialog(
@@ -89,13 +83,14 @@ fun AppSelectorDialog(
                     ) {
                         Text(
                             text = "Выбор приложений",
-                            color = ColorTextPrimary,
+                            color = TextPrimary,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = "Выбрано: ${selectedPackages.size} из ${apps.size}",
-                            color = ColorTextMuted,
+                            color = TextMuted,
+                            style = TabularNumbers,
                             fontSize = 13.sp
                         )
                     }
@@ -103,7 +98,7 @@ fun AppSelectorDialog(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Закрыть",
-                            tint = ColorTextSecondary
+                            tint = TextSecondary
                         )
                     }
                 }
@@ -117,7 +112,7 @@ fun AppSelectorDialog(
                     placeholder = {
                         Text(
                             text = "Поиск по названию или пакету...",
-                            color = ColorTextMuted,
+                            color = TextMuted,
                             fontSize = 14.sp
                         )
                     },
@@ -125,7 +120,7 @@ fun AppSelectorDialog(
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = null,
-                            tint = ColorTextMuted
+                            tint = TextMuted
                         )
                     },
                     trailingIcon = {
@@ -134,24 +129,24 @@ fun AppSelectorDialog(
                                 Icon(
                                     imageVector = Icons.Default.Clear,
                                     contentDescription = "Очистить",
-                                    tint = ColorTextMuted
+                                    tint = TextMuted
                                 )
                             }
                         }
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = ColorAccent,
+                        focusedBorderColor = AccentCyan,
                         unfocusedBorderColor = BorderDark,
-                        focusedTextColor = ColorTextPrimary,
-                        unfocusedTextColor = ColorTextPrimary,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
                         focusedContainerColor = SurfaceCard,
                         unfocusedContainerColor = SurfaceCard
                     )
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -162,33 +157,60 @@ fun AppSelectorDialog(
                         selected = filterMode == 0,
                         onClick = { filterMode = 0 },
                         label = { Text("Все", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(8.dp),
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0x3300E5FF),
-                            selectedLabelColor = ColorAccent,
+                            selectedContainerColor = AccentAlpha,
+                            selectedLabelColor = AccentCyan,
                             containerColor = SurfaceCard,
-                            labelColor = ColorTextSecondary
+                            labelColor = TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = filterMode == 0,
+                            borderColor = BorderDark,
+                            selectedBorderColor = AccentCyan
                         )
                     )
                     FilterChip(
                         selected = filterMode == 1,
                         onClick = { filterMode = 1 },
-                        label = { Text("Выбранные (${selectedPackages.size})", fontSize = 12.sp) },
+                        label = {
+                            Text(
+                                text = "Выбранные (${selectedPackages.size})",
+                                fontSize = 12.sp,
+                                style = TabularNumbers
+                            )
+                        },
+                        shape = RoundedCornerShape(8.dp),
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0x3300E5FF),
-                            selectedLabelColor = ColorAccent,
+                            selectedContainerColor = AccentAlpha,
+                            selectedLabelColor = AccentCyan,
                             containerColor = SurfaceCard,
-                            labelColor = ColorTextSecondary
+                            labelColor = TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = filterMode == 1,
+                            borderColor = BorderDark,
+                            selectedBorderColor = AccentCyan
                         )
                     )
                     FilterChip(
                         selected = filterMode == 2,
                         onClick = { filterMode = 2 },
                         label = { Text("Пользовательские", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(8.dp),
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0x3300E5FF),
-                            selectedLabelColor = ColorAccent,
+                            selectedContainerColor = AccentAlpha,
+                            selectedLabelColor = AccentCyan,
                             containerColor = SurfaceCard,
-                            labelColor = ColorTextSecondary
+                            labelColor = TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = filterMode == 2,
+                            borderColor = BorderDark,
+                            selectedBorderColor = AccentCyan
                         )
                     )
                 }
@@ -207,14 +229,14 @@ fun AppSelectorDialog(
                         Icon(
                             imageVector = Icons.Default.DoneAll,
                             contentDescription = null,
-                            tint = ColorAccent,
+                            tint = AccentCyan,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "Выбрать все",
                             fontSize = 13.sp,
-                            color = ColorAccent,
+                            color = AccentCyan,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -264,16 +286,17 @@ fun AppSelectorDialog(
                 Button(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ColorAccent,
+                        containerColor = AccentCyan,
                         contentColor = BgDark
                     )
                 ) {
                     Text(
                         text = "Готово (${selectedPackages.size} выбрано)",
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        style = TabularNumbers
                     )
                 }
             }
@@ -291,8 +314,8 @@ private fun AppItemRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) Color(0x1F00E5FF) else SurfaceDark)
-            .border(1.dp, if (isSelected) Color(0x4D00E5FF) else BorderDark, RoundedCornerShape(8.dp))
+            .background(if (isSelected) AccentAlpha else SurfaceDark)
+            .border(1.dp, if (isSelected) AccentCyan else BorderDark, RoundedCornerShape(8.dp))
             .toggleable(
                 value = isSelected,
                 role = Role.Checkbox,
@@ -319,7 +342,7 @@ private fun AppItemRow(
             ) {
                 Text(
                     text = app.appName.take(1).uppercase(),
-                    color = ColorTextMuted,
+                    color = TextMuted,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -335,17 +358,18 @@ private fun AppItemRow(
         ) {
             Text(
                 text = app.appName,
-                color = ColorTextPrimary,
+                color = TextPrimary,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = app.packageName,
-                color = ColorTextMuted,
+                color = TextMuted,
                 fontSize = 12.sp,
+                style = NetworkAddressStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -355,8 +379,8 @@ private fun AppItemRow(
             checked = isSelected,
             onCheckedChange = null,
             colors = CheckboxDefaults.colors(
-                checkedColor = ColorAccent,
-                uncheckedColor = ColorTextMuted,
+                checkedColor = AccentCyan,
+                uncheckedColor = TextMuted,
                 checkmarkColor = BgDark
             )
         )
