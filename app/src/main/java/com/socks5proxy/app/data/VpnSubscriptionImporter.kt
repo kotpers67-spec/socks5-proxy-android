@@ -84,7 +84,7 @@ object VpnSubscriptionImporter {
                 connection.readTimeout = 20_000
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("Accept", "text/plain, application/json, */*")
-                connection.setRequestProperty("User-Agent", "Socks5Proxy/1.4 Android")
+                connection.setRequestProperty("User-Agent", "v2rayNG/1.8.12 (Linux; Android 14)")
                 val status = connection.responseCode
                 if (status in 300..399) {
                     if (attempt == MAX_REDIRECTS) throw IllegalArgumentException("Слишком много перенаправлений подписки")
@@ -662,7 +662,8 @@ object VpnSubscriptionImporter {
     }
 
     private fun parseShareLinksWithLibXray(text: String, source: String): List<VpnServerProfile> {
-        val response = invoke("convertShareLinksToXrayJson", JSONObject().put("text", text))
+        val base64Payload = Base64.encodeToString(text.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+        val response = invoke("convertShareLinksToXrayJson", JSONObject().put("text", base64Payload))
         if (!response.optBoolean("success")) {
             return emptyList()
         }
