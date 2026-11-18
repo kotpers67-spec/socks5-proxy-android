@@ -5,4 +5,7 @@
     <string name="notification_title_connected">SOCKS5 прокси активен</string>
     <string name="notification_title_disconnected">SOCKS5 отключен</string>
     <string name="disconnect_action">Отключить</string>
+    <string name="quick_tile_label">SOCKS5</string>
+    <string name="quick_tile_local_subtitle">Локальный</string>
+    <string name="quick_tile_vpn_subtitle">Системный VPN</string>
 </resources>

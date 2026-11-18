@@ -67,8 +67,11 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -227,6 +230,15 @@ fun MainScreen(
                     onDismiss = { viewModel.setAppSelectorVisible(false) }
                 )
             }
+
+            if (uiState.isVpnImportDialogOpen) {
+                VpnImportDialog(
+                    isImporting = uiState.isImportingVpn,
+                    error = uiState.vpnImportError,
+                    onImport = viewModel::importVpnServers,
+                    onDismiss = { viewModel.closeVpnImportDialog() }
+                )
+            }
         }
     }
 }
@@ -268,7 +280,11 @@ private fun AppTopHeader(
                     .padding(horizontal = 9.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) "Без сброса VPN" else "Системный VPN",
+                    text = when (uiState.config.engineMode) {
+                        ProxyEngineMode.LOCAL_PROXY -> "Локальный SOCKS"
+                        ProxyEngineMode.SYSTEM_VPN -> "Системный VPN"
+                        ProxyEngineMode.VPN_PROFILE -> "Встроенный VPN"
+                    },
                     style = TextStyle(
                         color = if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) colors.accent else colors.textPrimary,
                         fontSize = 11.sp,
@@ -337,6 +353,18 @@ private fun HomeTabContent(
 ) {
     val colors = NeumorphismTheme.colors
     val activeProfile = uiState.config.activeProfile
+    var timerNowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(tunnelStatus.state, tunnelStatus.connectedAtMillis) {
+        if (tunnelStatus.state == TunnelState.CONNECTED && tunnelStatus.connectedAtMillis > 0L) {
+            while (true) {
+                timerNowMillis = System.currentTimeMillis()
+                delay(1000L)
+            }
+        } else {
+            timerNowMillis = System.currentTimeMillis()
+        }
+    }
 
     var copiedText by remember { mutableStateOf("Скопировать адрес для браузера (127.0.0.1:${if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort})") }
     var isCopiedActive by remember { mutableStateOf(false) }
@@ -380,7 +408,7 @@ private fun HomeTabContent(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = tunnelStatus.formattedDuration(),
+                text = tunnelStatus.formattedDuration(timerNowMillis),
                 style = TextStyle(
                     color = colors.textPrimary,
                     fontSize = 24.sp,
@@ -534,11 +562,29 @@ private fun HomeTabContent(
                 }
             }
 
+            if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY &&
+                tunnelStatus.state == TunnelState.CONNECTED &&
+                tunnelStatus.bytesIn == 0L && tunnelStatus.bytesOut == 0L
+            ) {
+                val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+                Text(
+                    text = "Ожидает трафик приложения: настройте SOCKS5 127.0.0.1:$listenPort в приложении-клиенте.",
+                    style = TextStyle(
+                        color = colors.textMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Center
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             Spacer(modifier = Modifier.height(10.dp))
 
             TrafficSparklineView(
                 isRunning = tunnelStatus.isRunning,
-                rxBytes = tunnelStatus.bytesIn
+                rxSpeedBps = tunnelStatus.rxSpeedBps,
+                txSpeedBps = tunnelStatus.txSpeedBps
             )
         }
     }
@@ -571,7 +617,7 @@ private fun HomeTabContent(
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "SOCKS5",
+                text = if (uiState.config.engineMode == ProxyEngineMode.VPN_PROFILE) "X-RAY" else "SOCKS5",
                         style = TextStyle(
                             color = colors.textMuted,
                             fontSize = 10.sp,
@@ -611,7 +657,7 @@ private fun HomeTabContent(
                                     .padding(top = 1.dp)
                             )
                             Text(
-                                text = "Обнаружен активный сторонний VPN. Трафик пойдет через него в SOCKS5 без сброса соединения.",
+                                text = "Локальный режим не перенаправляет весь трафик устройства. Он запускает SOCKS5 на 127.0.0.1; подключите к этому адресу нужные приложения.",
                                 style = TextStyle(
                                     color = colors.accent,
                                     fontSize = 12.sp,
@@ -623,7 +669,7 @@ private fun HomeTabContent(
                     }
 
                     Text(
-                        text = "В режиме «Без сброса VPN» приложение не занимает системный слот VPN. Ваш текущий VPN продолжает работать, а трафик в прокси идет через него.",
+                        text = "Этот режим не меняет системные маршруты. Для перенаправления всего трафика выберите «Системный VPN» и отключите другие VPN-приложения.",
                         style = TextStyle(
                             color = colors.textMuted,
                             fontSize = 11.5.sp,
@@ -666,6 +712,57 @@ private fun HomeTabContent(
                     }
                 }
             }
+
+            AnimatedVisibility(visible = uiState.config.engineMode == ProxyEngineMode.VPN_PROFILE) {
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(colors.insetBg)
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = "Встроенный Xray подключается к выбранному узлу. Android разрешает только один VPN-интерфейс: при активном стороннем VPN приложение предупредит и не запустит режим. Локальный SOCKS оставляет другое VPN активным.",
+                            style = TextStyle(color = colors.textSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Цепочка VPN → SOCKS5", color = colors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("VPN-узел, затем выбранный SOCKS5", color = colors.textMuted, fontSize = 11.sp)
+                        }
+                        NeumorphicSwitch(
+                            checked = uiState.config.isVpnToSocksChainEnabled,
+                            onCheckedChange = viewModel::toggleVpnToSocksChain
+                        )
+                    }
+
+                    if (uiState.config.isPerAppRoutingEnabled) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .clickable { viewModel.setAppSelectorVisible(true) }
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = "Выбрать приложения (${uiState.config.allowedApps.size})",
+                                color = colors.accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -677,7 +774,7 @@ private fun HomeTabContent(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Быстрое применение (Без сброса VPN):",
+                text = "Подключить приложение к локальному SOCKS5:",
                 style = TextStyle(
                     color = colors.textSecondary,
                     fontSize = 12.5.sp,
@@ -722,7 +819,7 @@ private fun HomeTabContent(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = "Применить прокси в Telegram в 1 клик",
+                        text = "Добавить SOCKS5 в Telegram",
                         style = TextStyle(
                             color = colors.accent,
                             fontSize = 13.sp,
@@ -786,6 +883,82 @@ private fun ServersTabContent(
 ) {
     val colors = NeumorphismTheme.colors
     val activeProfile = uiState.config.activeProfile
+    val checkingLocalRoute = uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY &&
+            tunnelStatus.state == TunnelState.CONNECTED && tunnelStatus.boundPort in 1..65535
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "VPN-серверы (${uiState.config.vpnProfiles.size})",
+                        color = colors.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("Xray · VLESS · VMess · Trojan · SS · SOCKS", color = colors.textMuted, fontSize = 10.sp)
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd)))
+                        .clickable { viewModel.openVpnImportDialog() }
+                        .padding(horizontal = 11.dp, vertical = 8.dp)
+                ) {
+                    Text("Импорт", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            if (uiState.config.vpnProfiles.isEmpty()) {
+                Text(
+                    text = "Вставьте ссылку на сервер или подписку, чтобы загрузить список узлов.",
+                    color = colors.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            } else {
+                uiState.config.vpnProfiles.forEach { server ->
+                    val selected = server.id == uiState.config.activeVpnProfileId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(if (selected) colors.accent.copy(alpha = 0.09f) else colors.insetBg)
+                            .border(
+                                1.dp,
+                                if (selected) colors.accent.copy(alpha = 0.4f) else colors.borderSubtle,
+                                RoundedCornerShape(11.dp)
+                            )
+                            .clickable {
+                                viewModel.selectActiveVpnProfile(server.id)
+                                viewModel.setEngineMode(ProxyEngineMode.VPN_PROFILE)
+                            }
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (selected) Icons.Default.CheckCircle else Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = if (selected) colors.accent else colors.textMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(server.name, color = colors.textPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${server.protocol.uppercase()} · ${server.host}:${server.port}", color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -889,7 +1062,11 @@ private fun ServersTabContent(
                         )
                     }
                     Text(
-                        text = if (uiState.isCheckingPing) "Проверка..." else "Проверить доступность: ${activeProfile.name}",
+                        text = when {
+                            uiState.isCheckingPing -> "Проверка..."
+                            checkingLocalRoute -> "Проверить маршрут через локальный SOCKS"
+                            else -> "Проверить внешний SOCKS: ${activeProfile.name}"
+                        },
                         style = TextStyle(
                             color = colors.accent,
                             fontSize = 13.sp,
@@ -935,9 +1112,10 @@ private fun ServersTabContent(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = when {
+                        text = when {
                                 uiState.pingResult == null -> "SOCKS5 готов к проверке"
-                                uiState.pingResult.isSuccess -> "SOCKS5 доступен (${uiState.pingResult.latencyMs} мс)"
+                            uiState.pingResult.isSuccess && checkingLocalRoute -> "Маршрут через локальный SOCKS работает (${uiState.pingResult.latencyMs} мс)"
+                            uiState.pingResult.isSuccess -> "Внешний SOCKS5 доступен (${uiState.pingResult.latencyMs} мс)"
                                 else -> "Ошибка подключения (${uiState.pingResult.message})"
                             },
                             style = TextStyle(
@@ -1224,7 +1402,7 @@ private fun SettingsTabContent(
                         )
                     )
                     Text(
-                        text = "Проксировать только выбранные приложения",
+                        text = "Системный VPN или встроенный VPN: только выбранные приложения",
                         style = TextStyle(
                             color = colors.textMuted,
                             fontSize = 11.5.sp
@@ -1237,6 +1415,15 @@ private fun SettingsTabContent(
                     onCheckedChange = { viewModel.togglePerAppRouting(it) }
                 )
             }
+
+            Text(
+                text = "Эта настройка действует в VPN-режимах. Локальный SOCKS не перехватывает трафик: приложение должно само подключиться к 127.0.0.1 и выбранному порту.",
+                style = TextStyle(
+                    color = colors.textMuted,
+                    fontSize = 11.5.sp,
+                    lineHeight = 15.sp
+                )
+            )
 
             Box(
                 modifier = Modifier
@@ -1526,15 +1713,17 @@ private fun HeroPowerBezel(
 @Composable
 private fun TrafficSparklineView(
     isRunning: Boolean,
-    rxBytes: Long
+    rxSpeedBps: Long,
+    txSpeedBps: Long
 ) {
     val colors = NeumorphismTheme.colors
     val sparklinePoints = remember { mutableStateListOf<Float>().apply { repeat(24) { add(16f) } } }
 
-    LaunchedEffect(isRunning, rxBytes) {
+    LaunchedEffect(isRunning, rxSpeedBps, txSpeedBps) {
         if (isRunning) {
-            val variance = (rxBytes % 12000).toFloat() / 12000f
-            val nextY = (4f + (1f - variance) * 16f).coerceIn(4f, 20f)
+            val combinedSpeed = (rxSpeedBps + txSpeedBps).coerceAtLeast(0L)
+            val normalizedSpeed = (combinedSpeed / (2 * 1024 * 1024f)).coerceIn(0f, 1f)
+            val nextY = (20f - normalizedSpeed * 16f).coerceIn(4f, 20f)
             if (sparklinePoints.size >= 24) {
                 sparklinePoints.removeAt(0)
             }
@@ -1600,9 +1789,14 @@ private fun SegmentedModeSelector(
             .padding(4.dp)
     ) {
         val totalWidth = maxWidth
-        val pillWidth = totalWidth / 2
+        val pillWidth = totalWidth / 3
+        val currentIndex = when (currentMode) {
+            ProxyEngineMode.LOCAL_PROXY -> 0
+            ProxyEngineMode.SYSTEM_VPN -> 1
+            ProxyEngineMode.VPN_PROFILE -> 2
+        }
         val pillOffset by animateDpAsState(
-            targetValue = if (currentMode == ProxyEngineMode.LOCAL_PROXY) 0.dp else pillWidth,
+            targetValue = pillWidth * currentIndex,
             animationSpec = tween(300),
             label = "modePill"
         )
@@ -1631,15 +1825,15 @@ private fun SegmentedModeSelector(
                     .weight(1f)
                     .fillMaxSize()
                     .clickable { onSelectMode(ProxyEngineMode.LOCAL_PROXY) }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.CenterStart
+                    .padding(horizontal = 5.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Без сброса VPN",
+                        text = "Локальный",
                         style = TextStyle(
                             color = if (currentMode == ProxyEngineMode.LOCAL_PROXY) colors.accent else colors.textSecondary,
-                            fontSize = 12.5.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
                     )
@@ -1647,7 +1841,7 @@ private fun SegmentedModeSelector(
                         text = "127.0.0.1:$localPort",
                         style = TextStyle(
                             color = colors.textMuted,
-                            fontSize = 10.5.sp,
+                            fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace
                         )
                     )
@@ -1659,15 +1853,15 @@ private fun SegmentedModeSelector(
                     .weight(1f)
                     .fillMaxSize()
                     .clickable { onSelectMode(ProxyEngineMode.SYSTEM_VPN) }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.CenterStart
+                    .padding(horizontal = 5.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "Системный VPN",
                         style = TextStyle(
                             color = if (currentMode == ProxyEngineMode.SYSTEM_VPN) colors.accent else colors.textSecondary,
-                            fontSize = 12.5.sp,
+                            fontSize = 10.5.sp,
                             fontWeight = FontWeight.Bold
                         )
                     )
@@ -1675,9 +1869,30 @@ private fun SegmentedModeSelector(
                         text = "Перехват ОС",
                         style = TextStyle(
                             color = colors.textMuted,
-                            fontSize = 10.5.sp
+                            fontSize = 9.sp
                         )
                     )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clickable { onSelectMode(ProxyEngineMode.VPN_PROFILE) }
+                    .padding(horizontal = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "VPN-сервер",
+                        style = TextStyle(
+                            color = if (currentMode == ProxyEngineMode.VPN_PROFILE) colors.accent else colors.textSecondary,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text("Xray", color = colors.textMuted, fontSize = 9.sp)
                 }
             }
         }
@@ -2021,4 +2236,57 @@ private fun ToastOverlay(
             }
         }
     }
+}
+
+@Composable
+private fun VpnImportDialog(
+    isImporting: Boolean,
+    error: String?,
+    onImport: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+    var source by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = { if (!isImporting) onDismiss() },
+        title = { Text("Импорт VPN-серверов") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Вставьте ссылку на узел или HTTPS-ссылку на подписку. Поддерживаются ссылки Xray и списки серверов.",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+                OutlinedTextField(
+                    value = source,
+                    onValueChange = { source = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("vless://… или https://…") },
+                    minLines = 3,
+                    maxLines = 7,
+                    enabled = !isImporting
+                )
+                if (isImporting) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("Загрузка и разбор узлов…", color = colors.textMuted, fontSize = 11.sp)
+                    }
+                }
+                if (error != null) {
+                    Text(error, color = colors.danger, fontSize = 11.5.sp, lineHeight = 15.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = source.isNotBlank() && !isImporting,
+                onClick = { onImport(source.trim()) }
+            ) { Text("Импортировать") }
+        },
+        dismissButton = {
+            TextButton(enabled = !isImporting, onClick = onDismiss) { Text("Отмена") }
+        }
+    )
 }

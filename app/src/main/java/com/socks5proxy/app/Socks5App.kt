@@ -11,6 +11,7 @@ class Socks5App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        appContext = applicationContext
         cleanupStaleTempFiles()
         createNotificationChannel()
     }
@@ -40,6 +41,9 @@ class Socks5App : Application() {
     }
 
     companion object {
+        lateinit var appContext: Context
+            private set
+
         const val CHANNEL_ID = "socks5_vpn_channel"
         const val NOTIFICATION_ID = 1001
     }

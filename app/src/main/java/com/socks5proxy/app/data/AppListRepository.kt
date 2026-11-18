@@ -18,12 +18,20 @@ class AppListRepository(private val context: Context) {
         val pm = context.packageManager
         val myPackage = context.packageName
 
-        val apps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        val launcherIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val launcherActivities = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.queryIntentActivities(
+                launcherIntent,
+                PackageManager.ResolveInfoFlags.of(0)
+            )
         } else {
             @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
+            pm.queryIntentActivities(launcherIntent, 0)
         }
+        val apps = launcherActivities
+            .mapNotNull { it.activityInfo?.applicationInfo }
+            .distinctBy { it.packageName }
 
         val resultList = mutableListOf<AppInfo>()
 

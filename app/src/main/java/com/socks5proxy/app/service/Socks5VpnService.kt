@@ -18,15 +18,21 @@ import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.network.Socks5Checker
 import com.socks5proxy.app.util.ScreenStateMonitor
+import libXray.DialerController
+import libXray.LibXray
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.amnezia.awg.hevtunnel.TProxyService
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 class Socks5VpnService : VpnService() {
 
@@ -34,6 +40,11 @@ class Socks5VpnService : VpnService() {
     private var configFile: File? = null
     private var statsJob: Job? = null
     private var isHevRunning = false
+    private var isXrayRunning = false
+    private var isXrayDnsConfigured = false
+    private var xrayDialerController: DialerController? = null
+    private var xrayMetricsPort = 0
+    private var xrayStatsOutboundTag = VpnTunnelConfigBuilder.VPN_OUTBOUND_TAG
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var screenMonitor: ScreenStateMonitor? = null
@@ -51,8 +62,15 @@ class Socks5VpnService : VpnService() {
         when (action) {
             ACTION_CONNECT -> {
                 val profile = config.activeProfile
-                if (!profile.isValid) {
+                val needsSocks = config.engineMode != com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE ||
+                    config.isVpnToSocksChainEnabled
+                if (needsSocks && !profile.isValid) {
                     updateStatus(TunnelStatus(TunnelState.ERROR, "Некорректные параметры SOCKS5"))
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE && config.activeVpnProfile == null) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, "Импортируйте и выберите VPN-сервер"))
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -102,36 +120,54 @@ class Socks5VpnService : VpnService() {
     }
 
     private fun startTunnel(config: ProxyConfig) {
-        val profile = config.activeProfile
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Установка соединения..."))
 
-        try {
+        serviceScope.launch {
+            try {
             cleanup()
+            if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE) {
+                startXrayTunnel(config)
+                return@launch
+            }
+            val profile = config.activeProfile
+            val probe = Socks5Checker.checkConnection(profile)
+            if (!probe.isSuccess) {
+                updateStatus(TunnelStatus(TunnelState.ERROR, probe.message))
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return@launch
+            }
             configFile = createHevConfigFile(config)
 
             val builder = Builder()
                 .setSession("SOCKS5: ${profile.host}:${profile.port}")
                 .setMtu(config.mtu)
                 .addAddress("198.18.0.1", 24)
+                .addAddress("fd00::1", 126)
                 .addDnsServer(config.primaryDns)
                 .addDnsServer(config.secondaryDns)
                 .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
 
             if (config.isPerAppRoutingEnabled) {
                 val safeApps = config.allowedApps.filter { it != packageName }
+                if (safeApps.isEmpty()) {
+                    throw IllegalStateException("Выберите хотя бы одно установленное приложение")
+                }
+                var routedApps = 0
                 for (pkg in safeApps) {
                     try {
                         builder.addAllowedApplication(pkg)
+                        routedApps++
                     } catch (e: Exception) {
                         Log.w(TAG, "Пропуск пакета $pkg: ${e.message}")
                     }
                 }
-            } else {
-                try {
-                    builder.addDisallowedApplication(packageName)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Не удалось исключить собственный пакет: ${e.message}")
+                if (routedApps == 0) {
+                    throw IllegalStateException("Ни одно выбранное приложение не установлено или недоступно")
                 }
+            } else {
+                builder.addDisallowedApplication(packageName)
             }
 
             val pfd = builder.establish() ?: throw IllegalStateException("Не удалось создать сетевой интерфейс VpnService")
@@ -152,12 +188,20 @@ class Socks5VpnService : VpnService() {
 
             startStatsPolling()
 
-        } catch (e: Exception) {
+            } catch (e: LinkageError) {
+                val engine = if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE) "Xray" else "SOCKS5"
+                Log.e(TAG, "Не удалось загрузить ядро $engine", e)
+                updateStatus(TunnelStatus(TunnelState.ERROR, "Не удалось загрузить ядро $engine: ${e.localizedMessage ?: e.message}"))
+                cleanup()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            } catch (e: Exception) {
             Log.e(TAG, "Ошибка запуска SOCKS5 туннеля", e)
             updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка: ${e.localizedMessage ?: e.message}"))
             cleanup()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+            }
         }
     }
 
@@ -167,30 +211,36 @@ class Socks5VpnService : VpnService() {
             var lastRx = 0L
             var lastTx = 0L
             var lastTimestamp = System.currentTimeMillis()
+            var hasBaseline = false
 
             while (isActive) {
                 val isScreenActive = screenMonitor?.awaitScreenOnOrInterval(activeIntervalMs = 1500L, idleIntervalMs = 15000L) ?: true
                 if (!isActive) break
 
                 try {
-                    val stats = TProxyService.TProxyGetStats()
-                    if (stats != null && stats.size >= 2) {
+                    val values = if (isXrayRunning) {
+                        readXrayTrafficStats()
+                    } else {
+                        val stats = TProxyService.TProxyGetStats()
+                        if (stats != null && stats.size >= 4) stats[3].coerceAtLeast(0L) to stats[1].coerceAtLeast(0L) else null
+                    }
+                    if (values != null) {
                         val now = System.currentTimeMillis()
                         val deltaMs = (now - lastTimestamp).coerceAtLeast(1L)
-                        val rx = stats[0]
-                        val tx = stats[1]
+                        val (rx, tx) = values
 
-                        val rxSpeed = if (isScreenActive && rx >= lastRx) {
+                        val rxSpeed = if (hasBaseline && isScreenActive && rx >= lastRx) {
                             ((rx - lastRx) * 1000L / deltaMs).coerceAtLeast(0L)
                         } else 0L
 
-                        val txSpeed = if (isScreenActive && tx >= lastTx) {
+                        val txSpeed = if (hasBaseline && isScreenActive && tx >= lastTx) {
                             ((tx - lastTx) * 1000L / deltaMs).coerceAtLeast(0L)
                         } else 0L
 
                         lastRx = rx
                         lastTx = tx
                         lastTimestamp = now
+                        hasBaseline = true
 
                         _statusFlow.update { current ->
                             if (current.state == TunnelState.CONNECTED) {
@@ -212,6 +262,98 @@ class Socks5VpnService : VpnService() {
         }
     }
 
+    private fun startXrayTunnel(config: ProxyConfig) {
+        val server = config.activeVpnProfile ?: throw IllegalStateException("Импортируйте VPN-сервер")
+        if (config.isVpnToSocksChainEnabled && !config.activeProfile.isValid) {
+            throw IllegalStateException("Проверьте параметры SOCKS5 для цепочки VPN → SOCKS5")
+        }
+
+        val builder = Builder()
+            .setSession("VPN: ${server.name}")
+            .setMtu(config.mtu)
+            .addAddress("198.18.0.1", 24)
+            .addAddress("fd00::1", 126)
+            .addDnsServer(config.primaryDns)
+            .addDnsServer(config.secondaryDns)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+
+        if (config.isPerAppRoutingEnabled) {
+            val selectedApps = config.allowedApps.filter { it != packageName }
+            if (selectedApps.isEmpty()) throw IllegalStateException("Выберите хотя бы одно приложение")
+            var routedApps = 0
+            selectedApps.forEach { packageName ->
+                try {
+                    builder.addAllowedApplication(packageName)
+                    routedApps++
+                } catch (e: Exception) {
+                    Log.w(TAG, "Пропуск приложения $packageName: ${e.message}")
+                }
+            }
+            if (routedApps == 0) throw IllegalStateException("Выбранные приложения недоступны")
+        } else {
+            builder.addDisallowedApplication(packageName)
+        }
+
+        val tun = builder.establish() ?: throw IllegalStateException("Android не создал VPN-интерфейс")
+        vpnInterface = tun
+        safeStartForeground(buildNotification(config))
+
+        val metricsPort = findFreeLocalPort()
+        xrayMetricsPort = metricsPort
+        val built = VpnTunnelConfigBuilder.build(config, server, tun.fd, metricsPort)
+        xrayStatsOutboundTag = built.measuredOutboundTag
+
+        val controller = object : DialerController {
+            override fun protectFd(fd: Long): Boolean = protect(fd.toInt())
+        }
+        xrayDialerController = controller
+        LibXray.registerDialerController(controller)
+        LibXray.setDNS(controller, "${config.primaryDns}:53")
+        isXrayDnsConfigured = true
+
+        invokeXray("runXray", JSONObject().put("xrayJson", built.json))
+        isXrayRunning = true
+
+        val chainLabel = if (config.isVpnToSocksChainEnabled) " → SOCKS5 ${config.activeProfile.host}:${config.activeProfile.port}" else ""
+        updateStatus(
+            TunnelStatus(
+                state = TunnelState.CONNECTED,
+                message = "VPN ${server.name}$chainLabel",
+                connectedAtMillis = System.currentTimeMillis()
+            )
+        )
+        startStatsPolling()
+    }
+
+    private fun invokeXray(method: String, payload: JSONObject): JSONObject {
+        val request = JSONObject()
+            .put("apiVersion", 3)
+            .put("method", method)
+            .put("payload", payload)
+        val response = JSONObject(LibXray.invoke(request.toString()))
+        if (!response.optBoolean("success")) {
+            throw IllegalStateException(response.optString("error").ifBlank { "Xray не запустился" })
+        }
+        return response
+    }
+
+    private fun findFreeLocalPort(): Int = java.net.ServerSocket(0).use { it.localPort }
+
+    private fun readXrayTrafficStats(): Pair<Long, Long>? {
+        val connection = URL("http://127.0.0.1:$xrayMetricsPort/debug/vars").openConnection() as HttpURLConnection
+        return try {
+            connection.connectTimeout = 1000
+            connection.readTimeout = 1000
+            val stats = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                .optJSONObject("stats") ?: return 0L to 0L
+            val prefix = "outbound>>>$xrayStatsOutboundTag>>>traffic>>>"
+            stats.optLong("${prefix}downlink") to stats.optLong("${prefix}uplink")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun createHevConfigFile(config: ProxyConfig): File {
         val file = File(cacheDir, "hev_tunnel_config.yml")
         val profile = config.activeProfile
@@ -220,11 +362,9 @@ class Socks5VpnService : VpnService() {
         val cleanPass = profile.password.replace("\r", "").replace("\n", "").replace("'", "''")
         val cleanHost = profile.host.trim().replace("\r", "").replace("\n", "").replace("'", "''")
 
+        // Keep these lines indented under the `socks5:` YAML mapping.
         val authYaml = if (cleanUser.isNotBlank()) {
-            """
-  username: '$cleanUser'
-  password: '$cleanPass'
-            """.trimIndent()
+            "  username: '$cleanUser'\n  password: '$cleanPass'"
         } else ""
 
         val udpMode = if (profile.isUdpEnabled) "udp" else "none"
@@ -234,6 +374,7 @@ tunnel:
   name: tun0
   mtu: ${config.mtu}
   ipv4: 198.18.0.1
+  ipv6: 'fd00::1'
 socks5:
   port: ${profile.port}
   address: '$cleanHost'
@@ -254,6 +395,7 @@ misc:
 
     private fun buildNotification(config: ProxyConfig): Notification {
         val profile = config.activeProfile
+        val vpnProfile = config.activeVpnProfile
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -276,10 +418,22 @@ misc:
             "Все приложения"
         }
 
+        val title = if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE) {
+            "VPN профиль активен"
+        } else {
+            "SOCKS5 прокси активен"
+        }
+        val route = if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE) {
+            val chain = if (config.isVpnToSocksChainEnabled) " → SOCKS5 ${profile.host}:${profile.port}" else ""
+            "${vpnProfile?.name ?: "VPN"}$chain • $subtext"
+        } else {
+            "${profile.host}:${profile.port} • $subtext"
+        }
+
         return NotificationCompat.Builder(this, Socks5App.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_proxy)
-            .setContentTitle("SOCKS5 прокси активен")
-            .setContentText("${profile.host}:${profile.port} • $subtext")
+            .setContentTitle(title)
+            .setContentText(route)
             .setSubText(subtext)
             .setContentIntent(pendingOpen)
             .setOngoing(true)
@@ -307,6 +461,25 @@ misc:
                 Log.w(TAG, "Ошибка остановки hev-socks5: ${e.message}")
             }
         }
+
+        if (isXrayRunning) {
+            isXrayRunning = false
+            try {
+                invokeXray("stopXray", JSONObject())
+            } catch (e: Exception) {
+                Log.w(TAG, "Ошибка остановки Xray: ${e.message}")
+            }
+        }
+        if (isXrayDnsConfigured) {
+            isXrayDnsConfigured = false
+            try {
+                LibXray.resetDNS()
+            } catch (e: Exception) {
+                Log.w(TAG, "Ошибка сброса DNS Xray: ${e.message}")
+            }
+        }
+        xrayDialerController = null
+        xrayMetricsPort = 0
 
         try {
             vpnInterface?.close()
@@ -361,7 +534,11 @@ misc:
         val statusFlow: StateFlow<TunnelStatus> = _statusFlow.asStateFlow()
 
         fun updateStatus(status: TunnelStatus) {
+            val previous = _statusFlow.value
             _statusFlow.value = status
+            if (previous.state != status.state || previous.boundPort != status.boundPort) {
+                ProxyQuickTileService.requestRefresh(Socks5App.appContext)
+            }
         }
 
         fun start(context: Context) {

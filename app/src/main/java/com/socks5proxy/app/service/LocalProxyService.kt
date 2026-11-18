@@ -18,6 +18,7 @@ import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.network.Socks5Checker
 import com.socks5proxy.app.util.BufferPool
 import com.socks5proxy.app.util.ScreenStateMonitor
 import kotlinx.coroutines.*
@@ -36,6 +37,7 @@ import java.util.concurrent.atomic.AtomicLong
 class LocalProxyService : Service() {
 
     private var serverSocket: ServerSocket? = null
+    private var serverJob: Job? = null
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
@@ -105,13 +107,24 @@ class LocalProxyService : Service() {
 
     private fun startProxyServer(config: ProxyConfig) {
         val profile = config.activeProfile
+        serverJob?.cancel()
+        runCatching { serverSocket?.close() }
+        serverSocket = null
         totalRxBytes.set(0L)
         totalTxBytes.set(0L)
 
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Запуск локального прокси на порту ${config.localListenPort}..."))
 
-        serviceScope.launch {
+        serverJob = serviceScope.launch {
             try {
+                val probe = Socks5Checker.checkConnection(profile)
+                if (!probe.isSuccess) {
+                    updateStatus(TunnelStatus(TunnelState.ERROR, probe.message))
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return@launch
+                }
+
                 try {
                     serverSocket?.close()
                 } catch (_: Exception) {}
@@ -151,7 +164,7 @@ class LocalProxyService : Service() {
                 updateStatus(
                     TunnelStatus(
                         state = TunnelState.CONNECTED,
-                        message = "127.0.0.1:$actualPort$portNote -> ${profile.host}:${profile.port}",
+                        message = "SOCKS5 проверен; локальный вход 127.0.0.1:$actualPort$portNote",
                         connectedAtMillis = startTime,
                         boundPort = actualPort
                     )
@@ -201,7 +214,15 @@ class LocalProxyService : Service() {
                 return
             }
             val methods = ByteArray(nMethods)
-            clientIn.read(methods)
+            clientIn.readFully(methods)
+            // The local listener intentionally accepts unauthenticated clients. Reject
+            // clients that did not offer that method instead of claiming it was accepted.
+            if (methods.none { it == 0x00.toByte() }) {
+                clientOut.write(byteArrayOf(0x05, 0xFF.toByte()))
+                clientOut.flush()
+                clientSocket.close()
+                return
+            }
 
             clientOut.write(byteArrayOf(0x05, 0x00))
             clientOut.flush()
@@ -222,7 +243,7 @@ class LocalProxyService : Service() {
             when (reqAtyp) {
                 0x01 -> {
                     val ip = ByteArray(4)
-                    clientIn.read(ip)
+                    clientIn.readFully(ip)
                     targetHost = InetAddress.getByAddress(ip).hostAddress ?: ""
                 }
                 0x03 -> {
@@ -232,12 +253,12 @@ class LocalProxyService : Service() {
                         return
                     }
                     val domainBytes = ByteArray(len)
-                    clientIn.read(domainBytes)
+                    clientIn.readFully(domainBytes)
                     targetHost = String(domainBytes, Charsets.UTF_8)
                 }
                 0x04 -> {
                     val ip = ByteArray(16)
-                    clientIn.read(ip)
+                    clientIn.readFully(ip)
                     targetHost = InetAddress.getByAddress(ip).hostAddress ?: ""
                 }
                 else -> {
@@ -249,6 +270,11 @@ class LocalProxyService : Service() {
             val portH = clientIn.read()
             val portL = clientIn.read()
             val targetPort = ((portH and 0xFF) shl 8) or (portL and 0xFF)
+            if (portH < 0 || portL < 0 || targetPort !in 1..65535) {
+                clientOut.write(byteArrayOf(0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                clientOut.flush()
+                return
+            }
 
             remoteSocket = connectThroughUpstream(profile, targetHost, targetPort, config.isFallbackDirectEnabled)
 
@@ -271,23 +297,22 @@ class LocalProxyService : Service() {
             coroutineScope {
                 launch(Dispatchers.IO) {
                     try {
-                        pipeData(client.getInputStream(), remote.getOutputStream(), totalRxBytes)
+                        pipeData(client.getInputStream(), remote.getOutputStream(), totalTxBytes)
                     } finally {
-                        runCatching { remote.close() }
-                        runCatching { client.close() }
+                        runCatching { remote.shutdownOutput() }
                     }
                 }
                 launch(Dispatchers.IO) {
                     try {
-                        pipeData(remote.getInputStream(), client.getOutputStream(), totalTxBytes)
+                        pipeData(remote.getInputStream(), client.getOutputStream(), totalRxBytes)
                     } finally {
-                        runCatching { client.close() }
-                        runCatching { remote.close() }
+                        runCatching { client.shutdownOutput() }
                     }
                 }
             }
 
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка SOCKS5-подключения клиента: ${e.message}")
         } finally {
             runCatching { clientSocket.close() }
             runCatching { remoteSocket?.close() }
@@ -304,6 +329,7 @@ class LocalProxyService : Service() {
         try {
             sock = Socket()
             sock.tcpNoDelay = true
+            sock.soTimeout = 5000
             sock.connect(InetSocketAddress(profile.host.trim(), profile.port), 5000)
 
             val out = sock.getOutputStream()
@@ -321,9 +347,15 @@ class LocalProxyService : Service() {
             val method = input.read()
             if (ver != 0x05) throw Exception("Invalid proxy")
 
+            if (hasAuth && method != 0x02) throw Exception("Upstream proxy rejected username/password authentication")
+            if (!hasAuth && method != 0x00) throw Exception("Upstream proxy requires authentication")
+
             if (method == 0x02) {
                 val uBytes = profile.username.toByteArray(Charsets.UTF_8)
                 val pBytes = profile.password.toByteArray(Charsets.UTF_8)
+                if (uBytes.size !in 1..255 || pBytes.size !in 1..255) {
+                    throw Exception("SOCKS5 username/password must be 1–255 bytes")
+                }
                 val authReq = ByteArray(3 + uBytes.size + pBytes.size)
                 authReq[0] = 0x01
                 authReq[1] = uBytes.size.toByte()
@@ -333,12 +365,13 @@ class LocalProxyService : Service() {
                 out.write(authReq)
                 out.flush()
 
-                input.read()
+                val authVersion = input.read()
                 val status = input.read()
-                if (status != 0x00) throw Exception("Auth failed")
+                if (authVersion != 0x01 || status != 0x00) throw Exception("Auth failed")
             }
 
             val targetBytes = targetHost.toByteArray(Charsets.UTF_8)
+            if (targetBytes.isEmpty() || targetBytes.size > 255) throw Exception("Invalid destination hostname")
             val connectReq = ByteArray(4 + 1 + targetBytes.size + 2)
             connectReq[0] = 0x05
             connectReq[1] = 0x01
@@ -352,20 +385,17 @@ class LocalProxyService : Service() {
             out.write(connectReq)
             out.flush()
 
-            val repVer = input.read()
-            val repStatus = input.read()
-            if (repVer != 0x05 || repStatus != 0x00) throw Exception("Upstream connect failed")
-
-            input.read()
-            val atyp = input.read()
-            when (atyp) {
-                0x01 -> input.skip(4 + 2)
-                0x03 -> {
-                    val l = input.read()
-                    input.skip((l + 2).toLong())
-                }
-                0x04 -> input.skip(16 + 2)
+            val reply = ByteArray(4)
+            input.readFully(reply)
+            if (reply[0].toInt() != 0x05 || reply[1].toInt() != 0x00) throw Exception("Upstream connect failed")
+            val addressLength = when (reply[3].toInt() and 0xFF) {
+                0x01 -> 4
+                0x04 -> 16
+                0x03 -> input.read().also { if (it < 0) throw java.io.EOFException() }
+                else -> throw Exception("Invalid upstream SOCKS5 reply")
             }
+            input.readFully(ByteArray(addressLength + 2))
+            sock.soTimeout = 0
 
             return sock
         } catch (e: Exception) {
@@ -394,6 +424,15 @@ class LocalProxyService : Service() {
                     counter.addAndGet(read.toLong())
                 }
             } catch (_: Exception) {}
+        }
+    }
+
+    private fun InputStream.readFully(buffer: ByteArray) {
+        var offset = 0
+        while (offset < buffer.size) {
+            val count = read(buffer, offset, buffer.size - offset)
+            if (count < 0) throw java.io.EOFException("Incomplete SOCKS5 packet")
+            offset += count
         }
     }
 
@@ -454,8 +493,9 @@ class LocalProxyService : Service() {
 
         return NotificationCompat.Builder(this, Socks5App.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_proxy)
-            .setContentTitle("SOCKS5 Прокси активен (Без VPN)")
-            .setContentText("127.0.0.1:$port • Трафик идет через текущий VPN")
+            .setContentTitle("SOCKS5 — локальный прокси")
+            .setContentText("127.0.0.1:$port • только настроенные приложения")
+            .setSubText("Системный VPN не меняется")
             .setContentIntent(pendingOpen)
             .setOngoing(true)
             .addAction(R.drawable.ic_stat_proxy, getString(R.string.disconnect_action), pendingDisconnect)
@@ -464,6 +504,8 @@ class LocalProxyService : Service() {
     }
 
     private fun stopProxyServer() {
+        serverJob?.cancel()
+        serverJob = null
         try {
             serverSocket?.close()
         } catch (_: Exception) {}
@@ -492,7 +534,11 @@ class LocalProxyService : Service() {
         val statusFlow: StateFlow<TunnelStatus> = _statusFlow.asStateFlow()
 
         fun updateStatus(status: TunnelStatus) {
+            val previous = _statusFlow.value
             _statusFlow.value = status
+            if (previous.state != status.state || previous.boundPort != status.boundPort) {
+                ProxyQuickTileService.requestRefresh(Socks5App.appContext)
+            }
         }
 
         fun start(context: Context) {

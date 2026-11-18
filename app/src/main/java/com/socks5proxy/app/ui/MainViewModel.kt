@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.socks5proxy.app.data.AppListRepository
 import com.socks5proxy.app.data.ProxyPreferences
+import com.socks5proxy.app.data.VpnSubscriptionImporter
 import com.socks5proxy.app.model.AppInfo
 import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.ProxyEngineMode
@@ -18,6 +19,7 @@ import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.updater.UpdateInfo
 import com.socks5proxy.app.updater.UpdateService
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Immutable
 data class MainUiState(
@@ -43,9 +46,13 @@ data class MainUiState(
     val isAppSelectorOpen: Boolean = false,
     val isProfileEditorOpen: Boolean = false,
     val editingProfile: ProxyProfile? = null,
+    val isVpnImportDialogOpen: Boolean = false,
+    val isImportingVpn: Boolean = false,
+    val vpnImportError: String? = null,
     val updateInfo: UpdateInfo? = null,
     val isDownloadingUpdate: Boolean = false,
-    val downloadProgress: Int = 0,
+    val updateDownloadProgress: Int = 0,
+    val isUpdateApkReady: Boolean = false,
     val isDarkTheme: Boolean = true,
     val activeTab: Int = 0,
     val toastMessage: String? = null
@@ -59,6 +66,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val initialDarkTheme = sharedPrefs.getBoolean("proxy_dark_theme", true)
     private var toastJob: Job? = null
+    private var downloadedUpdateApk: File? = null
 
     private val _uiState = MutableStateFlow(
         MainUiState(
@@ -126,20 +134,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val packageInfo = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0)
             val currentVersion = packageInfo.versionName ?: "1.0.0"
             val info = UpdateService.checkForUpdates(currentVersion)
-            if (info.hasUpdate) {
-                _uiState.update { it.copy(updateInfo = info) }
-            }
+            _uiState.update { it.copy(updateInfo = info.takeIf { update -> update.hasUpdate }) }
         }
     }
 
     fun downloadAndInstallUpdate() {
-        val url = _uiState.value.updateInfo?.downloadUrl ?: return
+        if (_uiState.value.isDownloadingUpdate) return
+
+        val context = getApplication<Application>()
+        val existingApk = downloadedUpdateApk?.takeIf(File::isFile)
+        if (existingApk != null) {
+            openDownloadedUpdate(context, existingApk)
+            return
+        }
+
+        val info = _uiState.value.updateInfo ?: return
+        _uiState.update { it.copy(isDownloadingUpdate = true, updateDownloadProgress = 0) }
         viewModelScope.launch {
-            _uiState.update { it.copy(isDownloadingUpdate = true, downloadProgress = 0) }
-            UpdateService.downloadAndInstallApk(getApplication(), url) { progress ->
-                _uiState.update { it.copy(downloadProgress = progress) }
+            try {
+                val apk = UpdateService.downloadApk(context, info) { progress ->
+                    _uiState.update { it.copy(updateDownloadProgress = progress) }
+                }
+                downloadedUpdateApk = apk
+                _uiState.update { it.copy(isDownloadingUpdate = false, isUpdateApkReady = true) }
+                openDownloadedUpdate(context, apk)
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isDownloadingUpdate = false) }
+                showToast(error.message?.takeIf(String::isNotBlank) ?: "Не удалось скачать обновление")
             }
-            _uiState.update { it.copy(isDownloadingUpdate = false) }
+        }
+    }
+
+    private fun openDownloadedUpdate(context: Context, apk: File) {
+        try {
+            val opened = UpdateService.openInstaller(context, apk)
+            showToast(
+                if (opened) "Подтвердите установку в окне Android"
+                else "Разрешите установку для приложения и нажмите кнопку ещё раз"
+            )
+        } catch (error: Exception) {
+            showToast(error.message?.takeIf(String::isNotBlank) ?: "Не удалось открыть установщик Android")
         }
     }
 
@@ -158,6 +192,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun togglePerAppRouting(enabled: Boolean) = updateConfig { copy(isPerAppRoutingEnabled = enabled) }
 
     fun selectActiveProfile(profileId: String) = updateConfig { copy(activeProfileId = profileId) }
+
+    fun selectActiveVpnProfile(profileId: String) = updateConfig { copy(activeVpnProfileId = profileId) }
+
+    fun toggleVpnToSocksChain(enabled: Boolean) = updateConfig { copy(isVpnToSocksChainEnabled = enabled) }
+
+    fun openVpnImportDialog() {
+        _uiState.update { it.copy(isVpnImportDialogOpen = true, vpnImportError = null) }
+    }
+
+    fun closeVpnImportDialog() {
+        _uiState.update { it.copy(isVpnImportDialogOpen = false, vpnImportError = null) }
+    }
+
+    fun importVpnServers(source: String) {
+        if (_uiState.value.isImportingVpn) return
+        _uiState.update { it.copy(isImportingVpn = true, vpnImportError = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val imported = VpnSubscriptionImporter.import(source)
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    updateConfig {
+                        val importedSource = imported.firstOrNull()?.sourceUrl.orEmpty()
+                        val retained = if (importedSource.isNotBlank()) {
+                            vpnProfiles.filterNot { it.sourceUrl == importedSource }
+                        } else {
+                            vpnProfiles
+                        }
+                        val merged = (retained + imported).distinctBy { it.id }
+                        val selectedStillExists = merged.any { it.id == activeVpnProfileId }
+                        copy(
+                            vpnProfiles = merged,
+                            activeVpnProfileId = if (selectedStillExists) activeVpnProfileId else imported.first().id
+                        )
+                    }
+                    _uiState.update { it.copy(isImportingVpn = false, isVpnImportDialogOpen = false) }
+                    showToast("Добавлено серверов: ${imported.size}")
+                }
+            } catch (e: Exception) {
+                val message = e.message?.takeIf(String::isNotBlank) ?: "Не удалось импортировать VPN-серверы"
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _uiState.update { it.copy(isImportingVpn = false, vpnImportError = message) }
+                }
+            }
+        }
+    }
 
     fun openAddProfile() {
         _uiState.update {
@@ -233,12 +312,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkProxyPing() {
         val config = _uiState.value.config
-        val active = config.activeProfile
-        if (!active.isValid || _uiState.value.isCheckingPing) return
+        val localStatus = LocalProxyService.statusFlow.value
+        val checkLocalRoute = config.engineMode == ProxyEngineMode.LOCAL_PROXY &&
+                localStatus.state == com.socks5proxy.app.model.TunnelState.CONNECTED &&
+                localStatus.boundPort in 1..65535
+        val target = if (checkLocalRoute) {
+            ProxyProfile(
+                name = "Локальный SOCKS5",
+                host = "127.0.0.1",
+                port = localStatus.boundPort
+            )
+        } else {
+            config.activeProfile
+        }
+        if (!target.isValid || _uiState.value.isCheckingPing) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isCheckingPing = true, pingResult = null) }
-            val result = Socks5Checker.checkConnection(active)
+            val result = Socks5Checker.checkConnection(target)
             _uiState.update { it.copy(isCheckingPing = false, pingResult = result) }
         }
     }

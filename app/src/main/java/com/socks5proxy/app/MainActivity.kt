@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.socks5proxy.app.model.ProxyEngineMode
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
+import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.network.VpnDetector
 import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
@@ -63,15 +64,19 @@ class MainActivity : ComponentActivity() {
                             Socks5VpnService.stop(this@MainActivity)
                         } else {
                             val active = uiState.config.activeProfile
-                            if (!active.isValid) {
+                            val needsSocks = uiState.config.engineMode != ProxyEngineMode.VPN_PROFILE ||
+                                uiState.config.isVpnToSocksChainEnabled
+                            if (needsSocks && !active.isValid) {
                                 viewModel.openEditProfile(active)
+                            } else if (uiState.config.engineMode == ProxyEngineMode.VPN_PROFILE && uiState.config.activeVpnProfile == null) {
+                                Toast.makeText(this@MainActivity, "Импортируйте VPN-ссылку во вкладке «Серверы»", Toast.LENGTH_LONG).show()
+                                viewModel.setActiveTab(1)
                             } else {
                                 val isVpnActive = VpnDetector.isExternalVpnActive(this@MainActivity)
-                                if (isVpnActive && uiState.config.engineMode == ProxyEngineMode.SYSTEM_VPN) {
-                                    viewModel.setEngineMode(ProxyEngineMode.LOCAL_PROXY)
-                                    Toast.makeText(this@MainActivity, "Обнаружен активный VPN: активирован режим «Без сброса VPN»", Toast.LENGTH_SHORT).show()
-                                    Socks5VpnService.stop(this@MainActivity)
-                                    LocalProxyService.start(this@MainActivity)
+                                if (isVpnActive && uiState.config.engineMode != ProxyEngineMode.LOCAL_PROXY) {
+                                    val message = "Android поддерживает один VPN за раз. Отключите другое VPN-приложение или выберите локальный SOCKS."
+                                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                                    Socks5VpnService.updateStatus(TunnelStatus(TunnelState.ERROR, message))
                                 } else if (uiState.config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
                                     Socks5VpnService.stop(this@MainActivity)
                                     LocalProxyService.start(this@MainActivity)
@@ -91,6 +96,52 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        handleTileConnectIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleTileConnectIntent(intent)
+    }
+
+    private fun handleTileConnectIntent(intent: android.content.Intent?) {
+        if (intent?.action != ACTION_TILE_CONNECT) return
+        intent.action = null
+
+        val config = ProxyPreferences(this).loadConfig()
+        val needsSocks = config.engineMode != ProxyEngineMode.VPN_PROFILE || config.isVpnToSocksChainEnabled
+        if (needsSocks && !config.activeProfile.isValid) {
+            viewModel.openEditProfile(config.activeProfile)
+            return
+        }
+
+        if (config.engineMode == ProxyEngineMode.VPN_PROFILE && config.activeVpnProfile == null) {
+            Toast.makeText(this, "Импортируйте VPN-ссылку во вкладке «Серверы»", Toast.LENGTH_LONG).show()
+            viewModel.setActiveTab(1)
+            return
+        }
+
+        if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+            LocalProxyService.start(this)
+            return
+        }
+
+        if (VpnDetector.isExternalVpnActive(this)) {
+            val message = "Android поддерживает один VPN за раз. Отключите другое VPN-приложение или выберите локальный SOCKS."
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            Socks5VpnService.updateStatus(TunnelStatus(TunnelState.ERROR, message))
+            return
+        }
+
+        if (config.isPerAppRoutingEnabled && config.allowedApps.isEmpty()) {
+            viewModel.setAppSelectorVisible(true)
+            return
+        }
+
+        LocalProxyService.stop(this)
+        prepareAndStartVpn()
     }
 
     private fun requestNotificationPermission() {
@@ -114,5 +165,9 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Не удалось инициализировать VPN: ${e.message}", Toast.LENGTH_SHORT).show()
             Socks5VpnService.updateStatus(TunnelStatus(TunnelState.ERROR, "Ошибка инициализации VPN: ${e.message}"))
         }
+    }
+
+    companion object {
+        const val ACTION_TILE_CONNECT = "com.socks5proxy.app.ACTION_TILE_CONNECT"
     }
 }

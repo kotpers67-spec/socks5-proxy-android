@@ -70,6 +70,9 @@ object Socks5Checker {
             if (chosenMethod == METHOD_NO_ACCEPTABLE) {
                 return@withContext PingResult(false, 0, "Сервер отклонил предложенные методы авторизации")
             }
+            if (chosenMethod != METHOD_NO_AUTH && chosenMethod != METHOD_USER_PASS) {
+                return@withContext PingResult(false, 0, "Сервер выбрал неподдерживаемый метод авторизации ($chosenMethod)")
+            }
 
             if (chosenMethod == METHOD_USER_PASS) {
                 if (!hasAuth) {
@@ -100,13 +103,49 @@ object Socks5Checker {
                 if (authVer == -1 || authStatus == -1) {
                     return@withContext PingResult(false, 0, "Сервер разорвал соединение в процессе аутентификации")
                 }
-                if (authStatus != AUTH_STATUS_SUCCESS) {
+                if (authVer != AUTH_SUBNEGOTIATION_VER || authStatus != AUTH_STATUS_SUCCESS) {
                     return@withContext PingResult(false, 0, "Неверный логин или пароль SOCKS5")
                 }
             }
 
+            val target = "example.com".toByteArray(Charsets.US_ASCII)
+            out.write(byteArrayOf(
+                SOCKS_VERSION_5.toByte(), 0x01, 0x00, 0x03,
+                target.size.toByte()
+            ))
+            out.write(target)
+            out.write(byteArrayOf(0x00, 0x50))
+            out.flush()
+
+            val reply = ByteArray(4)
+            input.readFully(reply)
+            if ((reply[0].toInt() and 0xFF) != SOCKS_VERSION_5) {
+                return@withContext PingResult(false, 0, "Некорректный ответ SOCKS5 на CONNECT")
+            }
+            val replyCode = reply[1].toInt() and 0xFF
+            if (replyCode != 0) {
+                return@withContext PingResult(false, 0, "Прокси отклонил тестовое соединение (код $replyCode)")
+            }
+            val boundAddressLength = when (reply[3].toInt() and 0xFF) {
+                0x01 -> 4
+                0x04 -> 16
+                0x03 -> input.read().also { if (it < 0) throw java.io.EOFException() }
+                else -> return@withContext PingResult(false, 0, "Некорректный адрес в ответе SOCKS5")
+            }
+            input.readFully(ByteArray(boundAddressLength + 2))
+
+            out.write(
+                "HEAD / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+                    .toByteArray(Charsets.US_ASCII)
+            )
+            out.flush()
+            val httpStatusLine = input.readHttpLine(256)
+            if (!httpStatusLine.startsWith("HTTP/1.")) {
+                return@withContext PingResult(false, 0, "Прокси подключился, но HTTP-ответ example.com не получен")
+            }
+
             val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
-            PingResult(true, latencyMs, "SOCKS5 доступен (${latencyMs} мс)")
+            PingResult(true, latencyMs, "Через SOCKS5 прошёл HTTP-запрос example.com (${latencyMs} мс)")
 
         } catch (e: CancellationException) {
             throw e
@@ -125,5 +164,25 @@ object Socks5Checker {
                 socket?.close()
             } catch (_: Exception) {}
         }
+    }
+
+    private fun InputStream.readFully(buffer: ByteArray) {
+        var offset = 0
+        while (offset < buffer.size) {
+            val count = read(buffer, offset, buffer.size - offset)
+            if (count < 0) throw java.io.EOFException("Неполный ответ SOCKS5")
+            offset += count
+        }
+    }
+
+    private fun InputStream.readHttpLine(maxLength: Int): String {
+        val line = StringBuilder()
+        while (line.length < maxLength) {
+            val value = read()
+            if (value < 0) break
+            if (value == '\n'.code) break
+            if (value != '\r'.code) line.append(value.toChar())
+        }
+        return line.toString()
     }
 }

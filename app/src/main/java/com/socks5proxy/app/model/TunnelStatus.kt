@@ -24,9 +24,9 @@ data class TunnelStatus(
     val isRunning: Boolean
         get() = state == TunnelState.CONNECTED || state == TunnelState.CONNECTING
 
-    fun formattedDuration(): String {
+    fun formattedDuration(nowMillis: Long = System.currentTimeMillis()): String {
         if (connectedAtMillis <= 0L || state != TunnelState.CONNECTED) return "00:00:00"
-        val seconds = ((System.currentTimeMillis() - connectedAtMillis) / 1000).coerceAtLeast(0L)
+        val seconds = ((nowMillis - connectedAtMillis) / 1000).coerceAtLeast(0L)
         val hrs = seconds / 3600
         val mins = (seconds % 3600) / 60
         val secs = seconds % 60
