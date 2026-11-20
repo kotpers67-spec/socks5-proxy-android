@@ -239,6 +239,18 @@ fun MainScreen(
                     onDismiss = { viewModel.closeVpnImportDialog() }
                 )
             }
+
+            val update = uiState.updateInfo
+            if (update != null) {
+                UpdateAvailableDialog(
+                    updateInfo = update,
+                    isDownloading = uiState.isDownloadingUpdate,
+                    progress = uiState.updateDownloadProgress,
+                    isReady = uiState.isUpdateApkReady,
+                    onInstall = { viewModel.downloadAndInstallUpdate() },
+                    onDismiss = { viewModel.dismissUpdate() }
+                )
+            }
         }
     }
 }
@@ -1708,6 +1720,58 @@ private fun SettingsTabContent(
             }
         }
     }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Обновление приложения",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        text = if (uiState.updateInfo != null) "Доступна версия v${uiState.updateInfo.latestVersion}" else "Текущая версия установлена",
+                        style = TextStyle(
+                            color = if (uiState.updateInfo != null) colors.accent else colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (uiState.updateInfo != null) Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd))
+                            else Brush.linearGradient(listOf(colors.insetBg, colors.insetBg))
+                        )
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                        .clickable { viewModel.checkForUpdates() }
+                        .padding(horizontal = 11.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        text = if (uiState.updateInfo != null) "Обновить" else "Проверить",
+                        color = colors.accent,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -2368,6 +2432,86 @@ private fun VpnImportDialog(
         },
         dismissButton = {
             TextButton(enabled = !isImporting, onClick = onDismiss) { Text("Отмена") }
+        }
+    )
+}
+
+@Composable
+private fun UpdateAvailableDialog(
+    updateInfo: com.socks5proxy.app.updater.UpdateInfo,
+    isDownloading: Boolean,
+    progress: Int,
+    isReady: Boolean,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = NeumorphismTheme.colors
+
+    AlertDialog(
+        onDismissRequest = { if (!isDownloading) onDismiss() },
+        title = {
+            Text(
+                text = "Доступно обновление v${updateInfo.latestVersion}",
+                color = colors.textPrimary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (updateInfo.releaseNotes.isNotBlank()) {
+                    Text(
+                        text = updateInfo.releaseNotes,
+                        color = colors.textSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                } else {
+                    Text(
+                        text = "Вышла новая версия приложения с улучшениями и исправлениями.",
+                        color = colors.textSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (isDownloading) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Загрузка обновления: $progress%",
+                        color = colors.accent,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = colors.accent,
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isDownloading,
+                onClick = onInstall
+            ) {
+                Text(
+                    text = when {
+                        isDownloading -> "Загрузка..."
+                        isReady -> "Установить"
+                        else -> "Обновить сейчас"
+                    },
+                    color = colors.accent,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        dismissButton = {
+            if (!isDownloading) {
+                TextButton(onClick = onDismiss) {
+                    Text("Позже", color = colors.textMuted)
+                }
+            }
         }
     )
 }
