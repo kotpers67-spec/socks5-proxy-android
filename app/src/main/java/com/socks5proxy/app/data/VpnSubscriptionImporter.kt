@@ -32,36 +32,44 @@ object VpnSubscriptionImporter {
             source
         }
 
-        val content = unwrapBase64IfNeeded(rawText)
-        val lines = content.lineSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .toList()
-
+        val content = unwrapBase64IfNeeded(rawText).trim()
         val parsedProfiles = mutableListOf<VpnServerProfile>()
-        val unparsedLines = mutableListOf<String>()
 
-        for (line in lines) {
-            val profile = parseSingleLine(line, source)
-            if (profile != null) {
-                parsedProfiles.add(profile)
-            } else if (looksLikeShareText(line)) {
-                unparsedLines.add(line)
-            }
-        }
-
-        if (unparsedLines.isNotEmpty()) {
-            val fallbackProfiles = runCatching {
-                parseShareLinksWithLibXray(unparsedLines.joinToString("\n"), source)
-            }.getOrDefault(emptyList())
-            parsedProfiles.addAll(fallbackProfiles)
+        if (content.startsWith("[") || content.startsWith("{")) {
+            val jsonProfiles = parseJsonContent(content, source)
+            parsedProfiles.addAll(jsonProfiles)
         }
 
         if (parsedProfiles.isEmpty()) {
-            val fallbackProfiles = runCatching {
-                parseShareLinksWithLibXray(content, source)
-            }.getOrDefault(emptyList())
-            parsedProfiles.addAll(fallbackProfiles)
+            val lines = content.lineSequence()
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .toList()
+
+            val unparsedLines = mutableListOf<String>()
+
+            for (line in lines) {
+                val profile = parseSingleLine(line, source)
+                if (profile != null) {
+                    parsedProfiles.add(profile)
+                } else if (looksLikeShareText(line)) {
+                    unparsedLines.add(line)
+                }
+            }
+
+            if (unparsedLines.isNotEmpty()) {
+                val fallbackProfiles = runCatching {
+                    parseShareLinksWithLibXray(unparsedLines.joinToString("\n"), source)
+                }.getOrDefault(emptyList())
+                parsedProfiles.addAll(fallbackProfiles)
+            }
+
+            if (parsedProfiles.isEmpty()) {
+                val fallbackProfiles = runCatching {
+                    parseShareLinksWithLibXray(content, source)
+                }.getOrDefault(emptyList())
+                parsedProfiles.addAll(fallbackProfiles)
+            }
         }
 
         val merged = parsedProfiles.distinctBy { it.id }
@@ -186,6 +194,49 @@ object VpnSubscriptionImporter {
             lower.startsWith("socks://") || lower.startsWith("socks5://") -> parseSocks(trimmed, source)
             else -> null
         }
+    }
+
+    private fun parseJsonContent(content: String, source: String): List<VpnServerProfile> = runCatching {
+        val trimmed = content.trim()
+        val list = mutableListOf<VpnServerProfile>()
+        if (trimmed.startsWith("[")) {
+            val array = JSONArray(trimmed)
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val profile = parseConfigObject(item, source)
+                if (profile != null) list.add(profile)
+            }
+        } else if (trimmed.startsWith("{")) {
+            val obj = JSONObject(trimmed)
+            val profile = parseConfigObject(obj, source)
+            if (profile != null) list.add(profile)
+        }
+        list
+    }.getOrDefault(emptyList())
+
+    private fun parseConfigObject(config: JSONObject, source: String): VpnServerProfile? {
+        val remarks = config.optString("remarks").ifBlank { config.optString("tag") }
+        val outbounds = config.optJSONArray("outbounds")
+        if (outbounds != null) {
+            var selectedOutbound: JSONObject? = null
+            for (i in 0 until outbounds.length()) {
+                val outbound = outbounds.optJSONObject(i) ?: continue
+                val proto = outbound.optString("protocol").lowercase()
+                if (proto in setOf("vless", "vmess", "trojan", "shadowsocks", "socks")) {
+                    if (outbound.optString("tag") == "proxy" || selectedOutbound == null) {
+                        selectedOutbound = outbound
+                        if (outbound.optString("tag") == "proxy") break
+                    }
+                }
+            }
+            if (selectedOutbound != null) {
+                val profile = profileFromOutbound(selectedOutbound, source)
+                if (profile != null) {
+                    return if (remarks.isNotBlank()) profile.copy(name = remarks) else profile
+                }
+            }
+        }
+        return profileFromOutbound(config, source)
     }
 
     private fun decodeName(name: String): String {

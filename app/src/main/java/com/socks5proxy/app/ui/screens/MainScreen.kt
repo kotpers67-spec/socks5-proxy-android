@@ -905,14 +905,47 @@ private fun ServersTabContent(
                     )
                     Text("Xray · VLESS · VMess · Trojan · SS · SOCKS", color = colors.textMuted, fontSize = 10.sp)
                 }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd)))
-                        .clickable { viewModel.openVpnImportDialog() }
-                        .padding(horizontal = 11.dp, vertical = 8.dp)
-                ) {
-                    Text("Импорт", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (uiState.config.vpnProfiles.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable(enabled = !uiState.isPingingAll) { viewModel.pingAllVpnProfiles() }
+                                .padding(horizontal = 9.dp, vertical = 7.dp)
+                        ) {
+                            if (uiState.isPingingAll) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = colors.accent,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Speed,
+                                        contentDescription = null,
+                                        tint = colors.accent,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text("Пинг всех", color = colors.accent, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd)))
+                            .clickable { viewModel.openVpnImportDialog() }
+                            .padding(horizontal = 11.dp, vertical = 8.dp)
+                    ) {
+                        Text("Импорт", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
@@ -953,6 +986,54 @@ private fun ServersTabContent(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(server.name, color = colors.textPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${server.protocol.uppercase()} · ${server.host}:${server.port}", color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+
+                        val ping = uiState.serverPingMap[server.id]
+                        val isPinging = uiState.pingingServerIds.contains(server.id)
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                                .clickable(enabled = !isPinging) { viewModel.pingVpnProfile(server.id) }
+                                .padding(horizontal = 7.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isPinging) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = colors.accent,
+                                    strokeWidth = 1.5.dp
+                                )
+                            } else if (ping != null) {
+                                val pingColor = when {
+                                    !ping.isSuccess -> colors.danger
+                                    ping.latencyMs < 150 -> colors.accent
+                                    ping.latencyMs < 350 -> colors.accent.copy(alpha = 0.8f)
+                                    else -> colors.danger.copy(alpha = 0.8f)
+                                }
+                                Text(
+                                    text = if (ping.isSuccess) "${ping.latencyMs} мс" else "Ошибка",
+                                    color = pingColor,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Speed,
+                                        contentDescription = null,
+                                        tint = colors.textMuted,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                    Text("пинг", color = colors.textMuted, fontSize = 10.sp)
+                                }
+                            }
                         }
                     }
                 }

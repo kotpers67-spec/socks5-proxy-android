@@ -55,7 +55,10 @@ data class MainUiState(
     val isUpdateApkReady: Boolean = false,
     val isDarkTheme: Boolean = true,
     val activeTab: Int = 0,
-    val toastMessage: String? = null
+    val toastMessage: String? = null,
+    val serverPingMap: Map<String, PingResult> = emptyMap(),
+    val pingingServerIds: Set<String> = emptySet(),
+    val isPingingAll: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -336,5 +339,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAppSelectorVisible(visible: Boolean) {
         _uiState.update { it.copy(isAppSelectorOpen = visible) }
+    }
+
+    fun pingVpnProfile(profileId: String) {
+        val server = _uiState.value.config.vpnProfiles.firstOrNull { it.id == profileId } ?: return
+        if (_uiState.value.pingingServerIds.contains(profileId)) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(pingingServerIds = it.pingingServerIds + profileId) }
+            val result = Socks5Checker.pingTcp(server.host, server.port)
+            _uiState.update { state ->
+                state.copy(
+                    pingingServerIds = state.pingingServerIds - profileId,
+                    serverPingMap = state.serverPingMap + (profileId to result)
+                )
+            }
+        }
+    }
+
+    fun pingAllVpnProfiles() {
+        val profiles = _uiState.value.config.vpnProfiles
+        if (profiles.isEmpty() || _uiState.value.isPingingAll) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isPingingAll = true,
+                    pingingServerIds = it.pingingServerIds + profiles.map { p -> p.id }.toSet()
+                )
+            }
+
+            profiles.forEach { server ->
+                launch {
+                    val result = Socks5Checker.pingTcp(server.host, server.port)
+                    _uiState.update { state ->
+                        state.copy(
+                            pingingServerIds = state.pingingServerIds - server.id,
+                            serverPingMap = state.serverPingMap + (server.id to result)
+                        )
+                    }
+                }
+            }
+
+            _uiState.update { it.copy(isPingingAll = false) }
+        }
     }
 }

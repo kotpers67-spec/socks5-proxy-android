@@ -25,6 +25,44 @@ object Socks5Checker {
     private const val AUTH_SUBNEGOTIATION_VER = 0x01
     private const val AUTH_STATUS_SUCCESS = 0x00
 
+    suspend fun pingTcp(host: String, port: Int, timeoutMs: Int = 3000): PingResult = withContext(Dispatchers.IO) {
+        val cleanHost = host.trim()
+        if (cleanHost.isEmpty() || port !in 1..65535) {
+            return@withContext PingResult(false, 0, "Некорректный адрес или порт")
+        }
+        val startNano = System.nanoTime()
+        var socket: Socket? = null
+        try {
+            val inetAddress = withTimeout(timeoutMs.toLong()) {
+                InetAddress.getByName(cleanHost)
+            }
+            socket = Socket().apply {
+                tcpNoDelay = true
+                soTimeout = timeoutMs
+            }
+            val socketAddress = InetSocketAddress(inetAddress, port)
+            socket.connect(socketAddress, timeoutMs)
+            val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
+            PingResult(true, latencyMs, "$latencyMs мс")
+        } catch (_: CancellationException) {
+            throw CancellationException()
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+            PingResult(false, 0, "Таймаут DNS")
+        } catch (_: java.net.SocketTimeoutException) {
+            PingResult(false, 0, "Таймаут")
+        } catch (_: java.net.ConnectException) {
+            PingResult(false, 0, "Недоступен")
+        } catch (_: java.net.UnknownHostException) {
+            PingResult(false, 0, "DNS ошибка")
+        } catch (e: Exception) {
+            PingResult(false, 0, e.message ?: "Сбой")
+        } finally {
+            try {
+                socket?.close()
+            } catch (_: Exception) {}
+        }
+    }
+
     suspend fun checkConnection(profile: ProxyProfile, timeoutMs: Int = 4000): PingResult = withContext(Dispatchers.IO) {
         val startNano = System.nanoTime()
         var socket: Socket? = null
