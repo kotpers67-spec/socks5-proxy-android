@@ -434,6 +434,65 @@ private fun HomeTabContent(
                 )
             )
 
+            if (tunnelStatus.state == TunnelState.CONNECTED) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                        .clickable(enabled = !uiState.isCheckingPing) { viewModel.checkProxyPing() }
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                ) {
+                    if (uiState.isCheckingPing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = colors.accent,
+                            strokeWidth = 1.5.dp
+                        )
+                        Text(
+                            text = "Замер пинга...",
+                            style = TextStyle(color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        )
+                    } else if (uiState.pingResult != null) {
+                        val isOk = uiState.pingResult.isSuccess
+                        val pingColor = if (isOk) {
+                            if (uiState.pingResult.latencyMs < 150) colors.accent
+                            else if (uiState.pingResult.latencyMs < 350) colors.accent.copy(alpha = 0.8f)
+                            else colors.danger
+                        } else colors.danger
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = null,
+                            tint = pingColor,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (isOk) "${uiState.pingResult.latencyMs} мс" else "Сбой сети",
+                            style = TextStyle(
+                                color = pingColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = null,
+                            tint = colors.textMuted,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "Проверить пинг",
+                            style = TextStyle(color = colors.textMuted, fontSize = 11.sp)
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             Box(
@@ -1239,11 +1298,12 @@ private fun ServersTabContent(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                        text = when {
-                                uiState.pingResult == null -> "SOCKS5 готов к проверке"
-                            uiState.pingResult.isSuccess && checkingLocalRoute -> "Маршрут через локальный SOCKS работает (${uiState.pingResult.latencyMs} мс)"
-                            uiState.pingResult.isSuccess -> "Внешний SOCKS5 доступен (${uiState.pingResult.latencyMs} мс)"
-                                else -> "Ошибка подключения (${uiState.pingResult.message})"
+                            text = when {
+                                uiState.pingResult == null -> "Готов к проверке"
+                                uiState.pingResult.isSuccess && checkingLocalRoute -> "Локальный SOCKS работает (${uiState.pingResult.latencyMs} мс)"
+                                uiState.pingResult.isSuccess && tunnelStatus.state == TunnelState.CONNECTED -> "Интернет через туннель доступен (${uiState.pingResult.latencyMs} мс)"
+                                uiState.pingResult.isSuccess -> "Узел доступен (${uiState.pingResult.latencyMs} мс)"
+                                else -> "Ошибка (${uiState.pingResult.message})"
                             },
                             style = TextStyle(
                                 color = when {

@@ -30,41 +30,69 @@ object Socks5Checker {
         if (cleanHost.isEmpty() || port !in 1..65535) {
             return@withContext PingResult(false, 0, "Некорректный адрес или порт")
         }
-        val startNano = System.nanoTime()
-        var socket: Socket? = null
-        try {
-            val inetAddress = withTimeout(timeoutMs.toLong()) {
+
+        // 1. Резолвим DNS ДО запуска таймера замера задержки.
+        // Это исключает скачки пинга из-за задержек мобильного DNS-сервера (джиттер 100-800 мс).
+        val inetAddress = try {
+            withTimeout(timeoutMs.toLong()) {
                 InetAddress.getByName(cleanHost)
             }
-            socket = Socket().apply {
-                tcpNoDelay = true
-                soTimeout = timeoutMs
-            }
-            val socketAddress = InetSocketAddress(inetAddress, port)
-            socket.connect(socketAddress, timeoutMs)
-            val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
-            PingResult(true, latencyMs, "$latencyMs мс")
         } catch (_: CancellationException) {
             throw CancellationException()
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
-            PingResult(false, 0, "Таймаут DNS")
-        } catch (_: java.net.SocketTimeoutException) {
-            PingResult(false, 0, "Таймаут")
-        } catch (_: java.net.ConnectException) {
-            PingResult(false, 0, "Недоступен")
+            return@withContext PingResult(false, 0, "Таймаут DNS")
         } catch (_: java.net.UnknownHostException) {
-            PingResult(false, 0, "DNS ошибка")
+            return@withContext PingResult(false, 0, "DNS ошибка")
         } catch (e: Exception) {
-            PingResult(false, 0, e.message ?: "Сбой")
-        } finally {
+            return@withContext PingResult(false, 0, "Сбой DNS: ${e.message ?: "неизвестно"}")
+        }
+
+        val socketAddress = InetSocketAddress(inetAddress, port)
+        var minLatency = Long.MAX_VALUE
+        var successCount = 0
+        var lastError: String? = null
+
+        // 2. Серия из 3 замеров TCP handshake (SYN -> SYN/ACK) с выбором минимального RTT.
+        // Первая проба прогревает сокетный стек и будит радиомодем сотовой связи (RRC transition),
+        // последующие пробы дают истинное и стабильное значение задержки физического канала.
+        val attempts = 3
+        val singleTimeout = timeoutMs.coerceAtLeast(1000)
+
+        for (i in 0 until attempts) {
+            var socket: Socket? = null
             try {
-                socket?.close()
-            } catch (_: Exception) {}
+                socket = Socket().apply {
+                    tcpNoDelay = true
+                    soTimeout = singleTimeout
+                }
+                val startNano = System.nanoTime()
+                socket.connect(socketAddress, singleTimeout)
+                val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
+                if (latencyMs < minLatency) {
+                    minLatency = latencyMs
+                }
+                successCount++
+            } catch (e: Exception) {
+                lastError = when (e) {
+                    is java.net.SocketTimeoutException -> "Таймаут"
+                    is java.net.ConnectException -> "Недоступен"
+                    else -> e.message ?: "Сбой"
+                }
+            } finally {
+                try {
+                    socket?.close()
+                } catch (_: Exception) {}
+            }
+        }
+
+        if (successCount > 0) {
+            PingResult(true, minLatency, "$minLatency мс")
+        } else {
+            PingResult(false, 0, lastError ?: "Недоступен")
         }
     }
 
     suspend fun checkConnection(profile: ProxyProfile, timeoutMs: Int = 4000): PingResult = withContext(Dispatchers.IO) {
-        val startNano = System.nanoTime()
         var socket: Socket? = null
 
         try {
@@ -146,13 +174,14 @@ object Socks5Checker {
                 }
             }
 
-            val target = "example.com".toByteArray(Charsets.US_ASCII)
+            val probeHost = "cp.cloudflare.com"
+            val target = probeHost.toByteArray(Charsets.US_ASCII)
             out.write(byteArrayOf(
                 SOCKS_VERSION_5.toByte(), 0x01, 0x00, 0x03,
                 target.size.toByte()
             ))
             out.write(target)
-            out.write(byteArrayOf(0x00, 0x50))
+            out.write(byteArrayOf(0x00, 0x50)) // порт 80
             out.flush()
 
             val reply = ByteArray(4)
@@ -172,18 +201,20 @@ object Socks5Checker {
             }
             input.readFully(ByteArray(boundAddressLength + 2))
 
+            val httpStartNano = System.nanoTime()
             out.write(
-                "HEAD / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+                "GET /generate_204 HTTP/1.1\r\nHost: $probeHost\r\nUser-Agent: SOCKS5Proxy/1.5\r\nConnection: close\r\n\r\n"
                     .toByteArray(Charsets.US_ASCII)
             )
             out.flush()
             val httpStatusLine = input.readHttpLine(256)
             if (!httpStatusLine.startsWith("HTTP/1.")) {
-                return@withContext PingResult(false, 0, "Прокси подключился, но HTTP-ответ example.com не получен")
+                return@withContext PingResult(false, 0, "Прокси подключился, но ответ не получен ($httpStatusLine)")
             }
 
-            val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
-            PingResult(true, latencyMs, "Через SOCKS5 прошёл HTTP-запрос example.com (${latencyMs} мс)")
+            // Замеряем чистую сквозную задержку HTTP-запроса через прокси (Real Delay)
+            val latencyMs = (System.nanoTime() - httpStartNano) / 1_000_000L
+            PingResult(true, latencyMs, "$latencyMs мс")
 
         } catch (e: CancellationException) {
             throw e
@@ -201,6 +232,38 @@ object Socks5Checker {
             try {
                 socket?.close()
             } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun pingHttp(urlStr: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): PingResult = withContext(Dispatchers.IO) {
+        var connection: java.net.HttpURLConnection? = null
+        try {
+            val startNano = System.nanoTime()
+            val url = java.net.URL(urlStr)
+            connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                instanceFollowRedirects = false
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "SOCKS5Proxy/1.5")
+                setRequestProperty("Connection", "close")
+            }
+            connection.connect()
+            val code = connection.responseCode
+            val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
+            if (code in 200..399) {
+                PingResult(true, latencyMs, "$latencyMs мс")
+            } else {
+                PingResult(false, latencyMs, "HTTP $code")
+            }
+        } catch (_: CancellationException) {
+            throw CancellationException()
+        } catch (_: java.net.SocketTimeoutException) {
+            PingResult(false, 0, "Таймаут")
+        } catch (e: Exception) {
+            PingResult(false, 0, e.message ?: "Сбой соединения")
+        } finally {
+            try { connection?.disconnect() } catch (_: Exception) {}
         }
     }
 

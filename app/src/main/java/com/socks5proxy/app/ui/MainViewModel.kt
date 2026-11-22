@@ -423,24 +423,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkProxyPing() {
         val config = _uiState.value.config
-        val localStatus = LocalProxyService.statusFlow.value
-        val checkLocalRoute = config.engineMode == ProxyEngineMode.LOCAL_PROXY &&
-                localStatus.state == com.socks5proxy.app.model.TunnelState.CONNECTED &&
-                localStatus.boundPort in 1..65535
-        val target = if (checkLocalRoute) {
-            ProxyProfile(
-                name = "Локальный SOCKS5",
-                host = "127.0.0.1",
-                port = localStatus.boundPort
-            )
-        } else {
-            config.activeProfile
-        }
-        if (!target.isValid || _uiState.value.isCheckingPing) return
+        val isTunnelConnected = tunnelStatus.value.state == com.socks5proxy.app.model.TunnelState.CONNECTED
+        if (_uiState.value.isCheckingPing) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isCheckingPing = true, pingResult = null) }
-            val result = Socks5Checker.checkConnection(target)
+            val result = if (isTunnelConnected && config.engineMode != ProxyEngineMode.LOCAL_PROXY) {
+                // В режиме системного VPN или VPN-профиля трафик устройства идет через туннель:
+                // замеряем реальный доступ в сеть через HTTP 204
+                Socks5Checker.pingHttp()
+            } else if (isTunnelConnected && config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
+                val boundPort = if (tunnelStatus.value.boundPort > 0) tunnelStatus.value.boundPort else config.localListenPort
+                val localTarget = ProxyProfile(name = "Локальный SOCKS5", host = "127.0.0.1", port = boundPort)
+                Socks5Checker.checkConnection(localTarget)
+            } else {
+                // Если туннель выключен, проверяем активный профиль SOCKS или VPN-сервер
+                if (config.engineMode == ProxyEngineMode.VPN_PROFILE) {
+                    val activeVpn = config.activeVpnProfile
+                    if (activeVpn != null) {
+                        Socks5Checker.pingTcp(activeVpn.host, activeVpn.port)
+                    } else {
+                        PingResult(false, 0, "VPN-сервер не выбран")
+                    }
+                } else {
+                    if (config.activeProfile.isValid) {
+                        Socks5Checker.checkConnection(config.activeProfile)
+                    } else {
+                        PingResult(false, 0, "SOCKS5-профиль не настроен")
+                    }
+                }
+            }
             _uiState.update { it.copy(isCheckingPing = false, pingResult = result) }
         }
     }
