@@ -9,4 +9,6 @@
 .externalNativeBuild
 .cxx
 *.apk
+*.keystore
+*.zip
 .kotlin/

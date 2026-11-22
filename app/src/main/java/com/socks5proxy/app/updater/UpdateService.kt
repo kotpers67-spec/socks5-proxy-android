@@ -2,6 +2,7 @@ package com.socks5proxy.app.updater
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -14,6 +15,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 data class UpdateInfo(
     val hasUpdate: Boolean,
@@ -28,19 +30,39 @@ object UpdateService {
     private const val GITHUB_REPO = "kotpers67-spec/socks5-proxy-android"
     private const val API_URL = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
     private const val MAX_APK_BYTES = 512L * 1024L * 1024L
+    private const val MAX_REDIRECTS = 5
     private val DOWNLOAD_HOSTS = setOf(
         "github.com",
         "release-assets.githubusercontent.com",
         "objects.githubusercontent.com"
     )
 
+    fun getUpdatesFolder(context: Context): File {
+        val folder = File(context.cacheDir, "updates")
+        if (!folder.exists()) folder.mkdirs()
+        return folder
+    }
+
+    fun getPartFile(context: Context): File {
+        return File(getUpdatesFolder(context), "update.apk.part")
+    }
+
+    fun getExistingPartBytes(context: Context): Long {
+        val part = getPartFile(context)
+        return if (part.isFile) part.length() else 0L
+    }
+
+    fun getTargetApkFile(context: Context, version: String): File {
+        return File(getUpdatesFolder(context), "Socks5Proxy-$version.apk")
+    }
+
     suspend fun checkForUpdates(currentVersion: String): UpdateInfo = withContext(Dispatchers.IO) {
         try {
             val connection = (URL(API_URL).openConnection() as HttpURLConnection).apply {
                 setRequestProperty("User-Agent", "Socks5ProxyAndroid")
                 setRequestProperty("Accept", "application/vnd.github+json")
-                connectTimeout = 8_000
-                readTimeout = 8_000
+                connectTimeout = 10_000
+                readTimeout = 10_000
             }
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) {
@@ -78,79 +100,159 @@ object UpdateService {
     suspend fun downloadApk(
         context: Context,
         updateInfo: UpdateInfo,
-        onProgress: (Int) -> Unit
+        onProgress: (percent: Int, downloadedBytes: Long, totalBytes: Long) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        val source = URL(updateInfo.downloadUrl)
-        require(source.protocol == "https" && source.host == "github.com") {
-            "Ссылка на APK должна вести на GitHub по HTTPS"
-        }
-        require(source.path.startsWith("/$GITHUB_REPO/releases/download/")) {
-            "Ссылка на APK не относится к релизам приложения"
+        var currentUrl = URL(updateInfo.downloadUrl)
+        require(currentUrl.protocol == "https" && currentUrl.host in DOWNLOAD_HOSTS) {
+            "Ссылка на APK должна вести на проверенные адреса GitHub по HTTPS"
         }
 
-        val folder = File(context.cacheDir, "updates")
-        if (!folder.exists() && !folder.mkdirs()) error("Не удалось подготовить папку обновления")
-        val temporaryFile = File(folder, "update.apk.part")
-        val apkFile = File(folder, "Socks5Proxy-${updateInfo.latestVersion}.apk")
-        val connection = (source.openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Socks5ProxyAndroid")
-            connectTimeout = 15_000
-            readTimeout = 30_000
+        val temporaryFile = getPartFile(context)
+        val apkFile = getTargetApkFile(context, updateInfo.latestVersion)
+
+        // Если готовый валидный APK уже скачан целиком
+        if (apkFile.isFile && isApkValid(apkFile)) {
+            onProgress(100, apkFile.length(), apkFile.length())
+            return@withContext apkFile
         }
+
+        val existingBytes = if (temporaryFile.isFile) temporaryFile.length() else 0L
+        var connection: HttpURLConnection? = null
+        var redirectCount = 0
 
         try {
-            val status = connection.responseCode
-            require(status in 200..299) { "GitHub вернул ошибку загрузки: HTTP $status" }
-            require(connection.url.protocol == "https" && connection.url.host in DOWNLOAD_HOSTS) {
-                "GitHub перенаправил загрузку на недоверенный адрес"
-            }
-            val contentLength = connection.contentLengthLong
-            require(contentLength <= MAX_APK_BYTES) { "Файл обновления превышает допустимый размер" }
+            while (true) {
+                val conn = (currentUrl.openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", "Socks5ProxyAndroid")
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    if (existingBytes > 0) {
+                        setRequestProperty("Range", "bytes=$existingBytes-")
+                    }
+                }
+                connection = conn
 
-            var downloaded = 0L
-            val digest = MessageDigest.getInstance("SHA-256")
-            connection.inputStream.use { input ->
-                FileOutputStream(temporaryFile).use { output ->
+                val status = conn.responseCode
+                if (status in 300..399) {
+                    val location = conn.getHeaderField("Location")
+                        ?: error("GitHub вернул пустой адрес перенаправления")
+                    currentUrl = URL(currentUrl, location)
+                    conn.disconnect()
+                    redirectCount++
+                    require(redirectCount <= MAX_REDIRECTS) { "Слишком много перенаправлений" }
+                    require(currentUrl.protocol == "https" && currentUrl.host in DOWNLOAD_HOSTS) {
+                        "Недоверенный адрес перенаправления: ${currentUrl.host}"
+                    }
+                    continue
+                }
+
+                require(status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_PARTIAL) {
+                    "Ошибка загрузки с GitHub: HTTP $status"
+                }
+                break
+            }
+
+            val finalConn = connection ?: error("Не удалось установить сетевое соединение")
+            val isPartial = finalConn.responseCode == HttpURLConnection.HTTP_PARTIAL
+            val contentLength = finalConn.contentLengthLong
+
+            val totalBytes: Long
+            val appendMode: Boolean
+            var downloaded: Long
+
+            if (isPartial && existingBytes > 0) {
+                totalBytes = if (contentLength > 0) existingBytes + contentLength else -1L
+                appendMode = true
+                downloaded = existingBytes
+            } else {
+                totalBytes = contentLength
+                appendMode = false
+                downloaded = 0L
+            }
+
+            require(totalBytes <= MAX_APK_BYTES) { "Файл обновления превышает допустимый размер" }
+
+            finalConn.inputStream.use { input ->
+                FileOutputStream(temporaryFile, appendMode).use { output ->
                     val buffer = ByteArray(32 * 1024)
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
-                        downloaded += count
-                        require(downloaded <= MAX_APK_BYTES) { "Файл обновления превышает допустимый размер" }
                         output.write(buffer, 0, count)
-                        digest.update(buffer, 0, count)
-                        if (contentLength > 0) {
-                            onProgress(((downloaded * 100) / contentLength).toInt().coerceIn(0, 100))
+                        downloaded += count
+                        require(downloaded <= MAX_APK_BYTES) { "Файл обновления превысил лимит" }
+
+                        if (totalBytes > 0) {
+                            val percent = ((downloaded * 100) / totalBytes).toInt().coerceIn(0, 100)
+                            onProgress(percent, downloaded, totalBytes)
+                        } else {
+                            onProgress(-1, downloaded, -1L)
                         }
                     }
+                    output.flush()
                 }
             }
-            require(downloaded > 0) { "GitHub вернул пустой APK" }
-            require(contentLength <= 0 || downloaded == contentLength) { "Загрузка APK завершилась не полностью" }
+
+            require(downloaded > 1024 * 1024) { "Скачанный файл слишком мал для APK приложения" }
+            require(totalBytes <= 0 || downloaded >= totalBytes) { "Загрузка прервана, скачано $downloaded из $totalBytes байт" }
+
+            // Проверяем валидность APK (должен быть валидным ZIP с AndroidManifest.xml)
+            if (!isApkValid(temporaryFile)) {
+                temporaryFile.delete()
+                error("Скачанный файл поврежден или не является корректным Android APK")
+            }
 
             if (updateInfo.sha256.isNotBlank()) {
+                val digest = MessageDigest.getInstance("SHA-256")
+                temporaryFile.inputStream().use { stream ->
+                    val buf = ByteArray(32 * 1024)
+                    var read: Int
+                    while (stream.read(buf).also { read = it } != -1) {
+                        digest.update(buf, 0, read)
+                    }
+                }
                 val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
-                require(actualHash.equals(updateInfo.sha256, ignoreCase = true)) {
-                    "Контрольная сумма APK не совпала"
+                if (!actualHash.equals(updateInfo.sha256, ignoreCase = true)) {
+                    temporaryFile.delete()
+                    error("Контрольная сумма SHA-256 не совпала")
                 }
             }
 
-            if (apkFile.exists() && !apkFile.delete()) error("Не удалось заменить старый файл обновления")
-            if (!temporaryFile.renameTo(apkFile)) error("Не удалось сохранить APK обновления")
-            onProgress(100)
+            if (apkFile.exists()) apkFile.delete()
+            if (!temporaryFile.renameTo(apkFile)) {
+                error("Не удалось переименовать файл обновления в ${apkFile.name}")
+            }
+
+            apkFile.setReadable(true, false)
+            onProgress(100, downloaded, totalBytes)
             apkFile
-        } catch (error: Exception) {
-            temporaryFile.delete()
-            throw error
+
+        } catch (e: Exception) {
+            // При ошибке сети НЕ удаляем part файл, сохраняем для докачки!
+            throw e
         } finally {
-            connection.disconnect()
+            connection?.disconnect()
+        }
+    }
+
+    private fun isApkValid(file: File): Boolean {
+        if (!file.isFile || file.length() < 1024 * 1024) return false
+        return try {
+            ZipFile(file).use { zip ->
+                zip.getEntry("AndroidManifest.xml") != null &&
+                zip.getEntry("classes.dex") != null
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
     /** Opens Android's installer, or the per-app unknown-source settings when permission is missing. */
     fun openInstaller(context: Context, apkFile: File): Boolean {
-        if (!apkFile.isFile) error("APK обновления не найден")
+        if (!apkFile.isFile || !isApkValid(apkFile)) error("Файл APK не найден или поврежден")
+
+        apkFile.setReadable(true, false)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
             val settingsIntent = Intent(
@@ -170,12 +272,22 @@ object UpdateService {
             setDataAndType(apkUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+
+        val resInfoList = context.packageManager.queryIntentActivities(installIntent, PackageManager.MATCH_DEFAULT_ONLY)
+        for (resolveInfo in resInfoList) {
+            val packageName = resolveInfo.activityInfo.packageName
+            context.grantUriPermission(packageName, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
         context.startActivity(installIntent)
         return true
     }
 
     private fun selectApkAsset(assets: List<JSONObject>): JSONObject? {
         if (assets.isEmpty()) return null
+        val signedAsset = assets.firstOrNull { it.optString("name").contains("signed", ignoreCase = true) }
+        if (signedAsset != null) return signedAsset
+
         val universal = assets.firstOrNull { it.optString("name").contains("universal", ignoreCase = true) }
         if (universal != null) return universal
 
@@ -186,7 +298,7 @@ object UpdateService {
         return matchingAbi ?: assets.first()
     }
 
-    private fun isVersionNewer(remote: String, current: String): Boolean {
+    fun isVersionNewer(remote: String, current: String): Boolean {
         val remoteParts = remote.split(".").mapNotNull { it.toIntOrNull() }
         val currentParts = current.split(".").mapNotNull { it.toIntOrNull() }
         val length = maxOf(remoteParts.size, currentParts.size)

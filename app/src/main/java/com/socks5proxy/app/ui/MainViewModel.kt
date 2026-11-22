@@ -52,6 +52,10 @@ data class MainUiState(
     val updateInfo: UpdateInfo? = null,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Int = 0,
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val isResumingDownload: Boolean = false,
+    val isUpdateDialogVisible: Boolean = false,
     val isUpdateApkReady: Boolean = false,
     val isDarkTheme: Boolean = true,
     val activeTab: Int = 0,
@@ -132,12 +136,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun checkForUpdates() {
+    fun checkForUpdates(forceShowDialog: Boolean = false) {
         viewModelScope.launch {
             val packageInfo = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0)
             val currentVersion = packageInfo.versionName ?: "1.0.0"
             val info = UpdateService.checkForUpdates(currentVersion)
-            _uiState.update { it.copy(updateInfo = info.takeIf { update -> update.hasUpdate }) }
+            val hasUpdate = info.hasUpdate
+
+            val snoozedVer = sharedPrefs.getString("snoozed_update_version", "").orEmpty()
+            val snoozedTime = sharedPrefs.getLong("snoozed_update_time", 0L)
+            val isSnoozedActive = snoozedVer == info.latestVersion && (System.currentTimeMillis() - snoozedTime < 24 * 60 * 60 * 1000L)
+
+            val showDialog = hasUpdate && (forceShowDialog || !isSnoozedActive)
+            val existingPart = UpdateService.getExistingPartBytes(getApplication<Application>())
+
+            _uiState.update {
+                it.copy(
+                    updateInfo = info.takeIf { u -> u.hasUpdate },
+                    isUpdateDialogVisible = showDialog,
+                    downloadedBytes = existingPart,
+                    isResumingDownload = existingPart > 0
+                )
+            }
+        }
+    }
+
+    fun showUpdateDialog() {
+        if (_uiState.value.updateInfo != null) {
+            val existingPart = UpdateService.getExistingPartBytes(getApplication<Application>())
+            _uiState.update {
+                it.copy(
+                    isUpdateDialogVisible = true,
+                    downloadedBytes = existingPart,
+                    isResumingDownload = existingPart > 0
+                )
+            }
+        } else {
+            checkForUpdates(forceShowDialog = true)
         }
     }
 
@@ -145,25 +180,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.isDownloadingUpdate) return
 
         val context = getApplication<Application>()
-        val existingApk = downloadedUpdateApk?.takeIf(File::isFile)
-        if (existingApk != null) {
-            openDownloadedUpdate(context, existingApk)
+        val info = _uiState.value.updateInfo ?: return
+        val targetApk = UpdateService.getTargetApkFile(context, info.latestVersion)
+        if (targetApk.isFile && targetApk.length() > 1024 * 1024) {
+            openDownloadedUpdate(context, targetApk)
             return
         }
 
-        val info = _uiState.value.updateInfo ?: return
-        _uiState.update { it.copy(isDownloadingUpdate = true, updateDownloadProgress = 0) }
+        _uiState.update { it.copy(isDownloadingUpdate = true) }
         viewModelScope.launch {
             try {
-                val apk = UpdateService.downloadApk(context, info) { progress ->
-                    _uiState.update { it.copy(updateDownloadProgress = progress) }
+                val apk = UpdateService.downloadApk(context, info) { percent, downloaded, total ->
+                    _uiState.update {
+                        it.copy(
+                            updateDownloadProgress = if (percent >= 0) percent else it.updateDownloadProgress,
+                            downloadedBytes = downloaded,
+                            totalBytes = total,
+                            isResumingDownload = downloaded > 0
+                        )
+                    }
                 }
                 downloadedUpdateApk = apk
                 _uiState.update { it.copy(isDownloadingUpdate = false, isUpdateApkReady = true) }
                 openDownloadedUpdate(context, apk)
             } catch (error: Exception) {
-                _uiState.update { it.copy(isDownloadingUpdate = false) }
-                showToast(error.message?.takeIf(String::isNotBlank) ?: "Не удалось скачать обновление")
+                val downloadedPart = UpdateService.getExistingPartBytes(context)
+                val partMb = downloadedPart / (1024 * 1024)
+                _uiState.update {
+                    it.copy(
+                        isDownloadingUpdate = false,
+                        downloadedBytes = downloadedPart,
+                        isResumingDownload = downloadedPart > 0
+                    )
+                }
+                val msg = if (downloadedPart > 0) {
+                    "Загрузка приостановлена на ${partMb} МБ. Нажмите «Возобновить», чтобы продолжить."
+                } else {
+                    error.message?.takeIf(String::isNotBlank) ?: "Не удалось скачать обновление"
+                }
+                showToast(msg)
             }
         }
     }
@@ -180,8 +235,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun snoozeUpdate() {
+        val info = _uiState.value.updateInfo
+        if (info != null) {
+            sharedPrefs.edit()
+                .putString("snoozed_update_version", info.latestVersion)
+                .putLong("snoozed_update_time", System.currentTimeMillis())
+                .apply()
+        }
+        _uiState.update { it.copy(isUpdateDialogVisible = false) }
+        showToast("Обновление отложено на 24 часа. Доступно в Настройках")
+    }
+
     fun dismissUpdate() {
-        _uiState.update { it.copy(updateInfo = null) }
+        _uiState.update { it.copy(isUpdateDialogVisible = false) }
     }
 
     fun setEngineMode(mode: ProxyEngineMode) = updateConfig { copy(engineMode = mode) }

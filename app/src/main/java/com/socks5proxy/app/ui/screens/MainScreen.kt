@@ -241,13 +241,17 @@ fun MainScreen(
             }
 
             val update = uiState.updateInfo
-            if (update != null) {
+            if (uiState.isUpdateDialogVisible && update != null) {
                 UpdateAvailableDialog(
                     updateInfo = update,
                     isDownloading = uiState.isDownloadingUpdate,
                     progress = uiState.updateDownloadProgress,
+                    downloadedBytes = uiState.downloadedBytes,
+                    totalBytes = uiState.totalBytes,
+                    isResuming = uiState.isResumingDownload,
                     isReady = uiState.isUpdateApkReady,
                     onInstall = { viewModel.downloadAndInstallUpdate() },
+                    onSnooze = { viewModel.snoozeUpdate() },
                     onDismiss = { viewModel.dismissUpdate() }
                 )
             }
@@ -1942,7 +1946,13 @@ private fun SettingsTabContent(
                             else Brush.linearGradient(listOf(colors.insetBg, colors.insetBg))
                         )
                         .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
-                        .clickable { viewModel.checkForUpdates() }
+                        .clickable {
+                            if (uiState.updateInfo != null) {
+                                viewModel.showUpdateDialog()
+                            } else {
+                                viewModel.checkForUpdates(forceShowDialog = true)
+                            }
+                        }
                         .padding(horizontal = 11.dp, vertical = 7.dp)
                 ) {
                     Text(
@@ -2624,8 +2634,12 @@ private fun UpdateAvailableDialog(
     updateInfo: com.socks5proxy.app.updater.UpdateInfo,
     isDownloading: Boolean,
     progress: Int,
+    downloadedBytes: Long,
+    totalBytes: Long,
+    isResuming: Boolean,
     isReady: Boolean,
     onInstall: () -> Unit,
+    onSnooze: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = NeumorphismTheme.colors
@@ -2657,19 +2671,30 @@ private fun UpdateAvailableDialog(
                     )
                 }
 
-                if (isDownloading) {
+                if (isDownloading || downloadedBytes > 0L) {
                     Spacer(modifier = Modifier.height(4.dp))
+                    val downloadedMb = String.format(java.util.Locale.US, "%.1f", downloadedBytes / (1024f * 1024f))
+                    val totalMb = if (totalBytes > 0L) String.format(java.util.Locale.US, "%.1f", totalBytes / (1024f * 1024f)) else "?"
+                    val textStatus = if (isDownloading) {
+                        "Загрузка: $progress% ($downloadedMb МБ / $totalMb МБ)"
+                    } else if (isResuming) {
+                        "Загрузка приостановлена ($downloadedMb МБ / $totalMb МБ)"
+                    } else {
+                        "Прогресс: $progress%"
+                    }
                     Text(
-                        text = "Загрузка обновления: $progress%",
+                        text = textStatus,
                         color = colors.accent,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = colors.accent,
-                        strokeWidth = 2.dp
-                    )
+                    if (isDownloading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = colors.accent,
+                            strokeWidth = 2.dp
+                        )
+                    }
                 }
             }
         },
@@ -2682,6 +2707,7 @@ private fun UpdateAvailableDialog(
                     text = when {
                         isDownloading -> "Загрузка..."
                         isReady -> "Установить"
+                        isResuming -> "Возобновить скачивание"
                         else -> "Обновить сейчас"
                     },
                     color = colors.accent,
@@ -2691,8 +2717,13 @@ private fun UpdateAvailableDialog(
         },
         dismissButton = {
             if (!isDownloading) {
-                TextButton(onClick = onDismiss) {
-                    Text("Позже", color = colors.textMuted)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = onSnooze) {
+                        Text("Отложить", color = colors.accent)
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("Закрыть", color = colors.textMuted)
+                    }
                 }
             }
         }
