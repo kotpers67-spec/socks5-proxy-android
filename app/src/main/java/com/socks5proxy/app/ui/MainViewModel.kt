@@ -198,6 +198,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectActiveVpnProfile(profileId: String) = updateConfig { copy(activeVpnProfileId = profileId) }
 
+    fun deleteVpnProfile(profileId: String) {
+        updateConfig {
+            val nextList = vpnProfiles.filter { it.id != profileId }
+            val nextActiveId = if (activeVpnProfileId == profileId) nextList.firstOrNull()?.id ?: "" else activeVpnProfileId
+            copy(vpnProfiles = nextList, activeVpnProfileId = nextActiveId)
+        }
+        _uiState.update { state ->
+            state.copy(
+                serverPingMap = state.serverPingMap - profileId,
+                pingingServerIds = state.pingingServerIds - profileId
+            )
+        }
+        showToast("VPN-сервер удалён")
+    }
+
+    fun clearAllVpnProfiles() {
+        updateConfig {
+            copy(vpnProfiles = emptyList(), activeVpnProfileId = "")
+        }
+        _uiState.update { state ->
+            state.copy(
+                serverPingMap = emptyMap(),
+                pingingServerIds = emptySet()
+            )
+        }
+        showToast("Все VPN-серверы удалены")
+    }
+
+    fun setDnsSettings(primaryDns: String, secondaryDns: String) {
+        val pDns = primaryDns.trim().ifBlank { "1.1.1.1" }
+        val sDns = secondaryDns.trim().ifBlank { "8.8.8.8" }
+        updateConfig { copy(primaryDns = pDns, secondaryDns = sDns) }
+        showToast("DNS сохранён: $pDns / $sDns")
+    }
+
+    fun setMtu(mtu: Int) {
+        val safeMtu = mtu.coerceIn(1200, 1500)
+        updateConfig { copy(mtu = safeMtu) }
+        showToast("MTU сохранён: $safeMtu")
+    }
+
     fun toggleVpnToSocksChain(enabled: Boolean) = updateConfig { copy(isVpnToSocksChainEnabled = enabled) }
 
     fun openVpnImportDialog() {
@@ -348,6 +389,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.update { it.copy(pingingServerIds = it.pingingServerIds + profileId) }
             val result = Socks5Checker.pingTcp(server.host, server.port)
+            _uiState.update { state ->
+                state.copy(
+                    pingingServerIds = state.pingingServerIds - profileId,
+                    serverPingMap = state.serverPingMap + (profileId to result)
+                )
+            }
+        }
+    }
+
+    fun pingSocksProfile(profileId: String) {
+        val profile = _uiState.value.config.profiles.firstOrNull { it.id == profileId } ?: return
+        if (!profile.isValid || _uiState.value.pingingServerIds.contains(profileId)) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(pingingServerIds = it.pingingServerIds + profileId) }
+            val result = Socks5Checker.pingTcp(profile.host, profile.port)
             _uiState.update { state ->
                 state.copy(
                     pingingServerIds = state.pingingServerIds - profileId,

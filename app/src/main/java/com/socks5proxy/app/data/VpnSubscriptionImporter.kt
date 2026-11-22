@@ -192,6 +192,7 @@ object VpnSubscriptionImporter {
             lower.startsWith("trojan://") -> parseTrojan(trimmed, source)
             lower.startsWith("ss://") -> parseShadowsocks(trimmed, source)
             lower.startsWith("socks://") || lower.startsWith("socks5://") -> parseSocks(trimmed, source)
+            lower.startsWith("hysteria2://") || lower.startsWith("hy2://") -> parseHysteria2(trimmed, source)
             else -> null
         }
     }
@@ -310,7 +311,9 @@ object VpnSubscriptionImporter {
         val userObj = JSONObject()
             .put("id", userId)
             .put("encryption", encryption)
-        if (flow.isNotBlank()) {
+        val isVisionFlow = flow.contains("vision", ignoreCase = true)
+        val isCompatibleWithVision = (network == "tcp") && (security == "reality" || security == "tls")
+        if (flow.isNotBlank() && (!isVisionFlow || isCompatibleWithVision)) {
             userObj.put("flow", flow)
         }
 
@@ -489,6 +492,51 @@ object VpnSubscriptionImporter {
             id = stableId(source, raw),
             name = name.ifBlank { "trojan · $host" },
             protocol = "trojan",
+            host = host,
+            port = port,
+            outboundJson = raw,
+            sourceUrl = cleanSourceUrl(source)
+        )
+    }.getOrNull()
+
+    private fun parseHysteria2(line: String, source: String): VpnServerProfile? = runCatching {
+        val name = decodeName(line.substringAfter('#', ""))
+        val withoutScheme = line.substringAfter("://").substringBefore('#').trim()
+        val beforeQuery = withoutScheme.substringBefore('?')
+        val queryString = if (withoutScheme.contains('?')) withoutScheme.substringAfter('?') else ""
+        val params = parseQueryParams(queryString)
+
+        val password = beforeQuery.substringBeforeLast('@').trim()
+        val hostPortStr = beforeQuery.substringAfterLast('@').trim()
+        val (host, port) = parseHostPort(hostPortStr, 443)
+        if (password.isBlank() || host.isBlank() || port !in 1..65535) return null
+
+        val sni = params["sni"].orEmpty()
+        val insecure = params["insecure"] == "1" || params["allowinsecure"] == "1"
+
+        val outbound = JSONObject()
+            .put("tag", "vpn-node")
+            .put("protocol", "hysteria2")
+            .put("settings", JSONObject().put("servers", JSONArray().put(
+                JSONObject()
+                    .put("address", host)
+                    .put("port", port)
+                    .put("password", password)
+            )))
+
+        val stream = JSONObject().put("network", "udp")
+        val tls = JSONObject().put("serverName", sni.ifBlank { host })
+        if (insecure) {
+            tls.put("allowInsecure", true)
+        }
+        stream.put("security", "tls").put("tlsSettings", tls)
+        outbound.put("streamSettings", stream)
+
+        val raw = outbound.toString()
+        VpnServerProfile(
+            id = stableId(source, raw),
+            name = name.ifBlank { "hy2 · $host" },
+            protocol = "hysteria2",
             host = host,
             port = port,
             outboundJson = raw,

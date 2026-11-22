@@ -924,6 +924,16 @@ private fun ServersTabContent(
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(colors.insetBg)
                                 .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable { viewModel.clearAllVpnProfiles() }
+                                .padding(horizontal = 9.dp, vertical = 7.dp)
+                        ) {
+                            Text("Очистить", color = colors.danger, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
                                 .clickable(enabled = !uiState.isPingingAll) { viewModel.pingAllVpnProfiles() }
                                 .padding(horizontal = 9.dp, vertical = 7.dp)
                         ) {
@@ -1047,6 +1057,23 @@ private fun ServersTabContent(
                                 }
                             }
                         }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                                .clickable { viewModel.deleteVpnProfile(server.id) }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Удалить сервер",
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1117,7 +1144,10 @@ private fun ServersTabContent(
                         profile = profile,
                         isSelected = isSelected,
                         onSelect = { viewModel.selectActiveProfile(profile.id) },
-                        onEdit = { viewModel.openEditProfile(profile) }
+                        onEdit = { viewModel.openEditProfile(profile) },
+                        ping = uiState.serverPingMap[profile.id],
+                        isPinging = uiState.pingingServerIds.contains(profile.id),
+                        onPing = { viewModel.pingSocksProfile(profile.id) }
                     )
                 }
             }
@@ -1321,7 +1351,10 @@ private fun ServerItemRow(
     profile: ProxyProfile,
     isSelected: Boolean,
     onSelect: () -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    ping: com.socks5proxy.app.network.PingResult? = null,
+    isPinging: Boolean = false,
+    onPing: () -> Unit = {}
 ) {
     val colors = NeumorphismTheme.colors
 
@@ -1387,25 +1420,75 @@ private fun ServerItemRow(
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            listOf(colors.gradStart, colors.gradEnd)
-                        )
-                    )
-                    .border(1.dp, colors.borderSubtle, CircleShape)
-                    .clickable(onClick = onEdit),
-                contentAlignment = Alignment.Center
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "Редактировать",
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(15.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                        .clickable(enabled = !isPinging, onClick = onPing)
+                        .padding(horizontal = 7.dp, vertical = 5.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isPinging) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = colors.accent,
+                            strokeWidth = 1.5.dp
+                        )
+                    } else if (ping != null) {
+                        val pingColor = when {
+                            !ping.isSuccess -> colors.danger
+                            ping.latencyMs < 150 -> colors.accent
+                            ping.latencyMs < 350 -> colors.accent.copy(alpha = 0.8f)
+                            else -> colors.danger.copy(alpha = 0.8f)
+                        }
+                        Text(
+                            text = if (ping.isSuccess) "${ping.latencyMs} мс" else "Сбой",
+                            color = pingColor,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text("пинг", color = colors.textMuted, fontSize = 10.sp)
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(colors.gradStart, colors.gradEnd)
+                            )
+                        )
+                        .border(1.dp, colors.borderSubtle, CircleShape)
+                        .clickable(onClick = onEdit),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Редактировать",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
         }
     }
@@ -1717,6 +1800,106 @@ private fun SettingsTabContent(
                     checked = uiState.config.isAutoStartEnabled,
                     onCheckedChange = { viewModel.toggleAutoStart(it) }
                 )
+            }
+        }
+    }
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "Сетевые параметры туннеля",
+                style = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Размер MTU: ${uiState.config.mtu} байт",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+                Text(
+                    text = "Оптимальный размер пакета для мобильной сети и обхода фрагментации",
+                    style = TextStyle(color = colors.textMuted, fontSize = 11.5.sp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(1400, 1360, 1280).forEach { mtuVal ->
+                        val isSel = uiState.config.mtu == mtuVal
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSel) colors.accent.copy(alpha = 0.2f) else colors.insetBg)
+                                .border(1.dp, if (isSel) colors.accent else colors.borderSubtle, RoundedCornerShape(8.dp))
+                                .clickable { viewModel.setMtu(mtuVal) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "$mtuVal",
+                                color = if (isSel) colors.accent else colors.textSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.dividerColor)
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "DNS серверы: ${uiState.config.primaryDns} / ${uiState.config.secondaryDns}",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+                Text(
+                    text = "Пресеты DNS для разрешения доменов внутри туннеля",
+                    style = TextStyle(color = colors.textMuted, fontSize = 11.5.sp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val presets = listOf(
+                        Triple("Cloudflare", "1.1.1.1", "1.0.0.1"),
+                        Triple("Google", "8.8.8.8", "8.8.4.4"),
+                        Triple("AdGuard", "94.140.14.14", "94.140.15.15")
+                    )
+                    presets.forEach { (label, pDns, sDns) ->
+                        val isSel = uiState.config.primaryDns == pDns
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSel) colors.accent.copy(alpha = 0.2f) else colors.insetBg)
+                                .border(1.dp, if (isSel) colors.accent else colors.borderSubtle, RoundedCornerShape(8.dp))
+                                .clickable { viewModel.setDnsSettings(pDns, sDns) }
+                                .padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSel) colors.accent else colors.textSecondary,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
             }
         }
     }

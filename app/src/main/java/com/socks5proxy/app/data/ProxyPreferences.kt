@@ -55,7 +55,10 @@ class ProxyPreferences(context: Context) {
             activeVpnProfileId = prefs.getString(KEY_ACTIVE_VPN_PROFILE_ID, vpnProfiles.firstOrNull()?.id ?: "") ?: "",
             isVpnToSocksChainEnabled = prefs.getBoolean(KEY_VPN_TO_SOCKS_CHAIN, false),
             profiles = if (profiles.isNotEmpty()) profiles else listOf(ProxyProfile()),
-            activeProfileId = activeId
+            activeProfileId = activeId,
+            primaryDns = prefs.getString(KEY_PRIMARY_DNS, "1.1.1.1") ?: "1.1.1.1",
+            secondaryDns = prefs.getString(KEY_SECONDARY_DNS, "8.8.8.8") ?: "8.8.8.8",
+            mtu = prefs.getInt(KEY_MTU, 1400)
         )
     }
 
@@ -72,6 +75,9 @@ class ProxyPreferences(context: Context) {
             .putBoolean(KEY_VPN_TO_SOCKS_CHAIN, config.isVpnToSocksChainEnabled)
             .putString(KEY_PROFILES, serializeProfiles(config.profiles))
             .putString(KEY_ACTIVE_PROFILE_ID, config.activeProfileId)
+            .putString(KEY_PRIMARY_DNS, config.primaryDns)
+            .putString(KEY_SECONDARY_DNS, config.secondaryDns)
+            .putInt(KEY_MTU, config.mtu)
             .apply()
     }
 
@@ -177,5 +183,8 @@ class ProxyPreferences(context: Context) {
         private const val KEY_VPN_TO_SOCKS_CHAIN = "vpn_to_socks_chain"
         private const val KEY_PROFILES = "proxy_profiles_list"
         private const val KEY_ACTIVE_PROFILE_ID = "proxy_active_profile_id"
+        private const val KEY_PRIMARY_DNS = "proxy_primary_dns"
+        private const val KEY_SECONDARY_DNS = "proxy_secondary_dns"
+        private const val KEY_MTU = "proxy_mtu"
     }
 }
