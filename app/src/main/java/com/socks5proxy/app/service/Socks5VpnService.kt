@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -19,6 +20,7 @@ import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.network.Socks5Checker
+import com.socks5proxy.app.util.AppLogBuffer
 import com.socks5proxy.app.util.ScreenStateMonitor
 import libXray.DialerController
 import libXray.LibXray
@@ -32,12 +34,14 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 
 class Socks5VpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var configFile: File? = null
+    private var connectJob: Job? = null
     private var statsJob: Job? = null
     private var isHevRunning = false
     private var isXrayRunning = false
@@ -120,11 +124,13 @@ class Socks5VpnService : VpnService() {
     }
 
     private fun startTunnel(config: ProxyConfig) {
+        connectJob?.cancel()
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Установка соединения..."))
+        AppLogBuffer.log("VPN", "Запуск туннеля в режиме ${config.engineMode.name}")
 
-        serviceScope.launch {
+        connectJob = serviceScope.launch {
             try {
-            cleanup()
+            cleanup(cancelConnectJob = false)
             if (config.engineMode == com.socks5proxy.app.model.ProxyEngineMode.VPN_PROFILE) {
                 startXrayTunnel(config)
                 return@launch
@@ -132,6 +138,7 @@ class Socks5VpnService : VpnService() {
             val profile = config.activeProfile
             val probe = Socks5Checker.checkConnection(profile)
             if (!probe.isSuccess) {
+                AppLogBuffer.log("VPN", "Ошибка проверки SOCKS5: ${probe.message}")
                 updateStatus(TunnelStatus(TunnelState.ERROR, probe.message))
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -148,6 +155,7 @@ class Socks5VpnService : VpnService() {
                 .addDnsServer(config.secondaryDns)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
+            applyLanBypassIfEnabled(builder, config)
 
             if (config.isPerAppRoutingEnabled) {
                 val safeApps = config.allowedApps.filter { it != packageName }
@@ -277,6 +285,7 @@ class Socks5VpnService : VpnService() {
             .addDnsServer(config.secondaryDns)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
+        applyLanBypassIfEnabled(builder, config)
 
         if (config.isPerAppRoutingEnabled) {
             val selectedApps = config.allowedApps.filter { it != packageName }
@@ -442,14 +451,36 @@ misc:
             .build()
     }
 
+    private fun applyLanBypassIfEnabled(builder: Builder, config: ProxyConfig) {
+        if (!config.isBypassLanEnabled) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val lanSubnets = listOf(
+                "10.0.0.0" to 8,
+                "172.16.0.0" to 12,
+                "192.168.0.0" to 16,
+                "169.254.0.0" to 16
+            )
+            lanSubnets.forEach { (addr, prefix) ->
+                runCatching {
+                    builder.excludeRoute(IpPrefix(InetAddress.getByName(addr), prefix))
+                }
+            }
+        }
+    }
+
     private fun stopTunnel() {
         cleanup()
+        AppLogBuffer.log("VPN", "Туннель остановлен")
         updateStatus(TunnelStatus(TunnelState.DISCONNECTED, "Туннель отключен"))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun cleanup() {
+    private fun cleanup(cancelConnectJob: Boolean = true) {
+        if (cancelConnectJob) {
+            connectJob?.cancel()
+            connectJob = null
+        }
         statsJob?.cancel()
         statsJob = null
 

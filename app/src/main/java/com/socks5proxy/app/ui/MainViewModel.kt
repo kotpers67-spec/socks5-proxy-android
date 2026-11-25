@@ -14,11 +14,13 @@ import com.socks5proxy.app.model.ProxyEngineMode
 import com.socks5proxy.app.model.ProxyProfile
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.network.PingResult
+import com.socks5proxy.app.network.PublicIpResult
 import com.socks5proxy.app.network.Socks5Checker
 import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.updater.UpdateInfo
 import com.socks5proxy.app.updater.UpdateService
+import com.socks5proxy.app.util.AppLogBuffer
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,7 +35,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 @Immutable
@@ -43,12 +48,17 @@ data class MainUiState(
     val isLoadingApps: Boolean = false,
     val isCheckingPing: Boolean = false,
     val pingResult: PingResult? = null,
+    val isCheckingPublicIp: Boolean = false,
+    val publicIpResult: PublicIpResult? = null,
     val isAppSelectorOpen: Boolean = false,
     val isProfileEditorOpen: Boolean = false,
     val editingProfile: ProxyProfile? = null,
     val isVpnImportDialogOpen: Boolean = false,
     val isImportingVpn: Boolean = false,
+    val isRefreshingSubscriptions: Boolean = false,
     val vpnImportError: String? = null,
+    val currentAppVersion: String = "",
+    val isCheckingUpdate: Boolean = false,
     val updateInfo: UpdateInfo? = null,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Int = 0,
@@ -62,7 +72,8 @@ data class MainUiState(
     val toastMessage: String? = null,
     val serverPingMap: Map<String, PingResult> = emptyMap(),
     val pingingServerIds: Set<String> = emptySet(),
-    val isPingingAll: Boolean = false
+    val isPingingAll: Boolean = false,
+    val isPingingAllSocks: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -95,9 +106,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TunnelStatus())
 
+    val logsFlow: StateFlow<List<String>> = AppLogBuffer.logsFlow
+
     init {
+        val currentVersion = runCatching {
+            application.packageManager.getPackageInfo(application.packageName, 0).versionName ?: "1.0.0"
+        }.getOrDefault("1.0.0")
+        _uiState.update { it.copy(currentAppVersion = currentVersion) }
+        UpdateService.cleanupOldUpdates(application)
         loadInstalledApps()
-        checkForUpdates()
+        if (_uiState.value.config.isAutoCheckUpdatesEnabled) {
+            checkForUpdates(forceShowDialog = false)
+        }
     }
 
     fun setDarkTheme(isDark: Boolean) {
@@ -137,9 +157,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkForUpdates(forceShowDialog: Boolean = false) {
+        if (_uiState.value.isCheckingUpdate) return
         viewModelScope.launch {
-            val packageInfo = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0)
-            val currentVersion = packageInfo.versionName ?: "1.0.0"
+            _uiState.update { it.copy(isCheckingUpdate = true) }
+            val context = getApplication<Application>()
+            val currentVersion = runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+            }.getOrDefault("1.0.0")
             val info = UpdateService.checkForUpdates(currentVersion)
             val hasUpdate = info.hasUpdate
 
@@ -148,15 +172,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val isSnoozedActive = snoozedVer == info.latestVersion && (System.currentTimeMillis() - snoozedTime < 24 * 60 * 60 * 1000L)
 
             val showDialog = hasUpdate && (forceShowDialog || !isSnoozedActive)
-            val existingPart = UpdateService.getExistingPartBytes(getApplication<Application>())
+            val existingPart = UpdateService.getExistingPartBytes(context)
 
             _uiState.update {
                 it.copy(
+                    currentAppVersion = currentVersion,
+                    isCheckingUpdate = false,
                     updateInfo = info.takeIf { u -> u.hasUpdate },
                     isUpdateDialogVisible = showDialog,
                     downloadedBytes = existingPart,
                     isResumingDownload = existingPart > 0
                 )
+            }
+
+            if (forceShowDialog && !hasUpdate) {
+                val msg = if (!info.errorMessage.isNullOrBlank()) {
+                    "Не удалось проверить обновления: ${info.errorMessage}"
+                } else {
+                    "У вас установлена актуальная версия v$currentVersion"
+                }
+                showToast(msg)
             }
         }
     }
@@ -182,7 +217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         val info = _uiState.value.updateInfo ?: return
         val targetApk = UpdateService.getTargetApkFile(context, info.latestVersion)
-        if (targetApk.isFile && targetApk.length() > 1024 * 1024) {
+        if (UpdateService.isApkValid(targetApk)) {
             openDownloadedUpdate(context, targetApk)
             return
         }
@@ -253,13 +288,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setEngineMode(mode: ProxyEngineMode) = updateConfig { copy(engineMode = mode) }
 
-    fun setLocalListenPort(port: Int) = updateConfig { copy(localListenPort = port) }
+    fun setLocalListenPort(port: Int) {
+        val safePort = port.coerceIn(1024, 65535)
+        updateConfig { copy(localListenPort = safePort) }
+        showToast("Локальный порт сохранён: $safePort")
+    }
 
     fun toggleAutoStart(enabled: Boolean) = updateConfig { copy(isAutoStartEnabled = enabled) }
 
     fun toggleFallbackDirect(enabled: Boolean) = updateConfig { copy(isFallbackDirectEnabled = enabled) }
 
     fun togglePerAppRouting(enabled: Boolean) = updateConfig { copy(isPerAppRoutingEnabled = enabled) }
+
+    fun toggleBypassLan(enabled: Boolean) = updateConfig { copy(isBypassLanEnabled = enabled) }
+
+    fun toggleAutoCheckUpdates(enabled: Boolean) = updateConfig { copy(isAutoCheckUpdatesEnabled = enabled) }
+
+    fun clearLogs() {
+        AppLogBuffer.clear()
+        showToast("Журнал событий очищен")
+    }
 
     fun selectActiveProfile(profileId: String) = updateConfig { copy(activeProfileId = profileId) }
 
@@ -385,10 +433,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteProfile(profileId: String) {
         updateConfig {
             val nextList = profiles.filter { it.id != profileId }
-            val finalProfiles = if (nextList.isEmpty()) listOf(ProxyProfile()) else nextList
-            val nextActiveId = if (activeProfileId == profileId) finalProfiles.first().id else activeProfileId
-            copy(profiles = finalProfiles, activeProfileId = nextActiveId)
+            val nextActiveId = if (activeProfileId == profileId) nextList.firstOrNull()?.id ?: "" else activeProfileId
+            copy(profiles = nextList, activeProfileId = nextActiveId)
         }
+        closeProfileEditor()
+        showToast("Прокси-профиль удалён")
+    }
+
+    fun importSocksProfileFromText(rawText: String): Boolean {
+        val parsed = ProxyProfile.fromUriOrLine(rawText) ?: return false
+        saveProfile(parsed)
+        showToast("Импортирован прокси ${parsed.host}:${parsed.port}")
+        return true
     }
 
     fun toggleAppSelection(packageName: String) {
@@ -505,9 +561,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            profiles.forEach { server ->
+            val semaphore = Semaphore(5)
+            val jobs = profiles.map { server ->
                 launch {
-                    val result = Socks5Checker.pingTcp(server.host, server.port)
+                    val result = semaphore.withPermit {
+                        Socks5Checker.pingTcp(server.host, server.port)
+                    }
                     _uiState.update { state ->
                         state.copy(
                             pingingServerIds = state.pingingServerIds - server.id,
@@ -516,8 +575,139 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
-
+            jobs.joinAll()
             _uiState.update { it.copy(isPingingAll = false) }
+        }
+    }
+
+    fun pingAllSocksProfiles() {
+        val profiles = _uiState.value.config.profiles.filter { it.isValid }
+        if (profiles.isEmpty() || _uiState.value.isPingingAllSocks) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isPingingAllSocks = true,
+                    pingingServerIds = it.pingingServerIds + profiles.map { p -> p.id }.toSet()
+                )
+            }
+            val semaphore = Semaphore(5)
+            val jobs = profiles.map { profile ->
+                launch {
+                    val result = semaphore.withPermit {
+                        Socks5Checker.pingTcp(profile.host, profile.port)
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            pingingServerIds = state.pingingServerIds - profile.id,
+                            serverPingMap = state.serverPingMap + (profile.id to result)
+                        )
+                    }
+                }
+            }
+            jobs.joinAll()
+            _uiState.update { it.copy(isPingingAllSocks = false) }
+        }
+    }
+
+    fun sortVpnProfilesByPing() {
+        val pingMap = _uiState.value.serverPingMap
+        updateConfig {
+            val sorted = vpnProfiles.sortedWith(
+                compareBy<com.socks5proxy.app.model.VpnServerProfile> { server ->
+                    val ping = pingMap[server.id]
+                    when {
+                        ping == null -> 1
+                        !ping.isSuccess -> 2
+                        else -> 0
+                    }
+                }.thenBy { server ->
+                    pingMap[server.id]?.latencyMs ?: Long.MAX_VALUE
+                }
+            )
+            copy(vpnProfiles = sorted)
+        }
+        showToast("Серверы отсортированы по задержке")
+    }
+
+    fun selectBestVpnProfile() {
+        val pingMap = _uiState.value.serverPingMap
+        val best = _uiState.value.config.vpnProfiles
+            .filter { pingMap[it.id]?.isSuccess == true }
+            .minByOrNull { pingMap[it.id]?.latencyMs ?: Long.MAX_VALUE }
+        if (best == null) {
+            showToast("Сначала нажмите «Пинг всех» для замера задержки")
+            return
+        }
+        selectActiveVpnProfile(best.id)
+        setEngineMode(ProxyEngineMode.VPN_PROFILE)
+        showToast("Выбран быстрый узел: ${best.name} (${pingMap[best.id]?.latencyMs} мс)")
+    }
+
+    fun refreshVpnSubscriptions() {
+        if (_uiState.value.isRefreshingSubscriptions) return
+        val urls = _uiState.value.config.vpnProfiles
+            .map { it.sourceUrl.trim() }
+            .filter { it.startsWith("https://", ignoreCase = true) }
+            .distinct()
+        if (urls.isEmpty()) {
+            showToast("Нет сохранённых HTTPS-подписок для обновления")
+            return
+        }
+        _uiState.update { it.copy(isRefreshingSubscriptions = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedCount = 0
+            var failedCount = 0
+            for (url in urls) {
+                try {
+                    val imported = VpnSubscriptionImporter.import(url)
+                    withContext(Dispatchers.Main) {
+                        updateConfig {
+                            val retained = vpnProfiles.filterNot { it.sourceUrl == url }
+                            val merged = (retained + imported).distinctBy { it.id }
+                            val selectedStillExists = merged.any { it.id == activeVpnProfileId }
+                            copy(
+                                vpnProfiles = merged,
+                                activeVpnProfileId = if (selectedStillExists) activeVpnProfileId else merged.firstOrNull()?.id.orEmpty()
+                            )
+                        }
+                    }
+                    updatedCount += imported.size
+                } catch (e: Exception) {
+                    failedCount++
+                    AppLogBuffer.log("SUB", "Ошибка обновления подписки $url: ${e.message}")
+                }
+            }
+            withContext(Dispatchers.Main) {
+                _uiState.update { it.copy(isRefreshingSubscriptions = false) }
+                val msg = if (failedCount == 0) {
+                    "Подписки обновлены: $updatedCount серверов"
+                } else {
+                    "Обновлено серверов: $updatedCount (ошибок подписок: $failedCount)"
+                }
+                showToast(msg)
+            }
+        }
+    }
+
+    fun checkPublicIp() {
+        if (_uiState.value.isCheckingPublicIp) return
+        val config = _uiState.value.config
+        val status = tunnelStatus.value
+        val localPort = if (status.state == com.socks5proxy.app.model.TunnelState.CONNECTED &&
+            config.engineMode == ProxyEngineMode.LOCAL_PROXY
+        ) {
+            if (status.boundPort > 0) status.boundPort else config.localListenPort
+        } else {
+            null
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingPublicIp = true) }
+            val result = Socks5Checker.checkPublicIp(localSocksPort = localPort)
+            _uiState.update { it.copy(isCheckingPublicIp = false, publicIpResult = result) }
+            if (!result.isSuccess) {
+                showToast("Не удалось определить IP: ${result.message}")
+            }
         }
     }
 }

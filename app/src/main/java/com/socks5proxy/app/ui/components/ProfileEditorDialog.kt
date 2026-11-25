@@ -1,5 +1,8 @@
 package com.socks5proxy.app.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +22,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -35,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -50,11 +56,14 @@ import com.socks5proxy.app.ui.theme.NeumorphismTheme
 @Composable
 fun ProfileEditorDialog(
     profile: ProxyProfile,
+    canDelete: Boolean,
     onSave: (ProxyProfile) -> Unit,
     onDismiss: () -> Unit,
-    onDelete: ((String) -> Unit)? = null
+    onDelete: ((String) -> Unit)? = null,
+    onShowToast: ((String) -> Unit)? = null
 ) {
     val colors = NeumorphismTheme.colors
+    val context = LocalContext.current
 
     var name by remember(profile.id) { mutableStateOf(profile.name) }
     var host by remember(profile.id) { mutableStateOf(profile.host) }
@@ -63,11 +72,10 @@ fun ProfileEditorDialog(
     var password by remember(profile.id) { mutableStateOf(profile.password) }
     var passVisible by remember { mutableStateOf(false) }
 
-    val isExisting = profile.host.isNotBlank() && profile.host != "127.0.0.1"
-
-    val isValid = remember(host, portStr) {
+    val isValid = remember(host, portStr, username, password) {
         val p = portStr.toIntOrNull()
-        host.isNotBlank() && p != null && p in 1..65535
+        host.isNotBlank() && p != null && p in 1..65535 &&
+            ((username.isBlank() && password.isBlank()) || (username.isNotBlank() && password.isNotEmpty()))
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -97,7 +105,7 @@ fun ProfileEditorDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isExisting) "Редактировать сервер" else "Добавить прокси-сервер",
+                        text = if (canDelete) "Редактировать сервер" else "Добавить прокси-сервер",
                         style = TextStyle(
                             color = colors.textPrimary,
                             fontSize = 16.sp,
@@ -105,25 +113,72 @@ fun ProfileEditorDialog(
                         )
                     )
 
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(colors.gradStart, colors.gradEnd)
-                                )
-                            )
-                            .border(1.dp, colors.borderSubtle, CircleShape)
-                            .clickable(onClick = onDismiss),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Закрыть",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                                    val parsed = ProxyProfile.fromUriOrLine(clipText)
+                                    if (parsed != null) {
+                                        name = parsed.name
+                                        host = parsed.host
+                                        portStr = parsed.port.toString()
+                                        username = parsed.username
+                                        password = parsed.password
+                                        onShowToast?.invoke("Параметры вставлены из буфера")
+                                    } else {
+                                        onShowToast?.invoke("В буфере нет socks5:// или host:port")
+                                    }
+                                }
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentPaste,
+                                    contentDescription = "Вставить",
+                                    tint = colors.accent,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Вставить",
+                                    color = colors.accent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(colors.gradStart, colors.gradEnd)
+                                    )
+                                )
+                                .border(1.dp, colors.borderSubtle, CircleShape)
+                                .clickable(onClick = onDismiss),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Закрыть",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
 
@@ -162,7 +217,7 @@ fun ProfileEditorDialog(
                         NeumorphicInputField(
                             value = host,
                             onValueChange = { host = it },
-                            placeholder = "72.56.103.114",
+                            placeholder = "example.com или IP",
                             isMono = true
                         )
                     }
@@ -182,7 +237,7 @@ fun ProfileEditorDialog(
                         NeumorphicInputField(
                             value = portStr,
                             onValueChange = { if (it.all { ch -> ch.isDigit() }) portStr = it },
-                            placeholder = "48471",
+                            placeholder = "1080",
                             isMono = true,
                             keyboardType = KeyboardType.Number
                         )
@@ -289,7 +344,52 @@ fun ProfileEditorDialog(
                     )
                 }
 
-                if (onDelete != null && isExisting) {
+                if (isValid) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(colors.insetBg)
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                            .clickable {
+                                val parsedPort = portStr.toIntOrNull() ?: 1080
+                                val uri = profile.copy(
+                                    name = name.ifBlank { "Прокси" },
+                                    host = host.trim(),
+                                    port = parsedPort,
+                                    username = username.trim(),
+                                    password = password.trim()
+                                ).toSocksUri()
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                clipboard?.setPrimaryClip(ClipData.newPlainText("SOCKS5 URI", uri))
+                                onShowToast?.invoke("Ссылка socks5:// скопирована")
+                            }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Копировать ссылку",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "Копировать socks5:// ссылку",
+                                style = TextStyle(
+                                    color = colors.textSecondary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+                    }
+                }
+
+                if (onDelete != null && canDelete) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()

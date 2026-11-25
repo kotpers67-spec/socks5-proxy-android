@@ -21,24 +21,10 @@ class ProxyPreferences(context: Context) {
         }
 
         val profilesJson = prefs.getString(KEY_PROFILES, null)
-        val rawProfiles = if (!profilesJson.isNullOrBlank()) {
+        val profiles = if (!profilesJson.isNullOrBlank()) {
             deserializeProfiles(profilesJson)
         } else {
             emptyList()
-        }
-        val profiles = if (rawProfiles.isNotEmpty() && rawProfiles.any { it.isValid && it.host != "127.0.0.1" }) {
-            rawProfiles
-        } else {
-            listOf(
-                ProxyProfile(
-                    name = "Основной прокси",
-                    host = "72.56.103.114",
-                    port = 48471,
-                    username = "proxy_user",
-                    password = "9Kvo904s1bhsazPn",
-                    isUdpEnabled = true
-                )
-            )
         }
 
         val activeId = prefs.getString(KEY_ACTIVE_PROFILE_ID, profiles.firstOrNull()?.id ?: "") ?: ""
@@ -54,11 +40,13 @@ class ProxyPreferences(context: Context) {
             vpnProfiles = vpnProfiles,
             activeVpnProfileId = prefs.getString(KEY_ACTIVE_VPN_PROFILE_ID, vpnProfiles.firstOrNull()?.id ?: "") ?: "",
             isVpnToSocksChainEnabled = prefs.getBoolean(KEY_VPN_TO_SOCKS_CHAIN, false),
-            profiles = if (profiles.isNotEmpty()) profiles else listOf(ProxyProfile()),
+            profiles = profiles,
             activeProfileId = activeId,
             primaryDns = prefs.getString(KEY_PRIMARY_DNS, "1.1.1.1") ?: "1.1.1.1",
             secondaryDns = prefs.getString(KEY_SECONDARY_DNS, "8.8.8.8") ?: "8.8.8.8",
-            mtu = prefs.getInt(KEY_MTU, 1400)
+            mtu = prefs.getInt(KEY_MTU, 1400),
+            isBypassLanEnabled = prefs.getBoolean(KEY_BYPASS_LAN, true),
+            isAutoCheckUpdatesEnabled = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
         )
     }
 
@@ -78,6 +66,8 @@ class ProxyPreferences(context: Context) {
             .putString(KEY_PRIMARY_DNS, config.primaryDns)
             .putString(KEY_SECONDARY_DNS, config.secondaryDns)
             .putInt(KEY_MTU, config.mtu)
+            .putBoolean(KEY_BYPASS_LAN, config.isBypassLanEnabled)
+            .putBoolean(KEY_AUTO_CHECK_UPDATES, config.isAutoCheckUpdatesEnabled)
             .apply()
     }
 
@@ -186,5 +176,7 @@ class ProxyPreferences(context: Context) {
         private const val KEY_PRIMARY_DNS = "proxy_primary_dns"
         private const val KEY_SECONDARY_DNS = "proxy_secondary_dns"
         private const val KEY_MTU = "proxy_mtu"
+        private const val KEY_BYPASS_LAN = "proxy_bypass_lan"
+        private const val KEY_AUTO_CHECK_UPDATES = "proxy_auto_check_updates"
     }
 }

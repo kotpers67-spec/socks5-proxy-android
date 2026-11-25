@@ -19,6 +19,7 @@ import com.socks5proxy.app.model.ProxyConfig
 import com.socks5proxy.app.model.TunnelState
 import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.network.Socks5Checker
+import com.socks5proxy.app.util.AppLogBuffer
 import com.socks5proxy.app.util.BufferPool
 import com.socks5proxy.app.util.ScreenStateMonitor
 import kotlinx.coroutines.*
@@ -114,11 +115,13 @@ class LocalProxyService : Service() {
         totalTxBytes.set(0L)
 
         updateStatus(TunnelStatus(TunnelState.CONNECTING, "Запуск локального прокси на порту ${config.localListenPort}..."))
+        AppLogBuffer.log("SOCKS5", "Запуск локального входа на 127.0.0.1:${config.localListenPort}")
 
         serverJob = serviceScope.launch {
             try {
                 val probe = Socks5Checker.checkConnection(profile)
                 if (!probe.isSuccess) {
+                    AppLogBuffer.log("SOCKS5", "Ошибка проверки узла ${profile.host}:${profile.port}: ${probe.message}")
                     updateStatus(TunnelStatus(TunnelState.ERROR, probe.message))
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()

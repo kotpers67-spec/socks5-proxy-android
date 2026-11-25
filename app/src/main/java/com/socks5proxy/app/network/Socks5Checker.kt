@@ -17,6 +17,13 @@ data class PingResult(
     val message: String
 )
 
+data class PublicIpResult(
+    val isSuccess: Boolean,
+    val ip: String = "",
+    val country: String = "",
+    val message: String = ""
+)
+
 object Socks5Checker {
     private const val SOCKS_VERSION_5 = 0x05
     private const val METHOD_NO_AUTH = 0x00
@@ -262,6 +269,48 @@ object Socks5Checker {
             PingResult(false, 0, "Таймаут")
         } catch (e: Exception) {
             PingResult(false, 0, e.message ?: "Сбой соединения")
+        } finally {
+            try { connection?.disconnect() } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun checkPublicIp(
+        localSocksPort: Int? = null,
+        timeoutMs: Int = 5000
+    ): PublicIpResult = withContext(Dispatchers.IO) {
+        var connection: java.net.HttpURLConnection? = null
+        try {
+            val url = java.net.URL("https://ipwho.is/")
+            val proxy = if (localSocksPort != null && localSocksPort in 1..65535) {
+                java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", localSocksPort))
+            } else {
+                java.net.Proxy.NO_PROXY
+            }
+            connection = (url.openConnection(proxy) as java.net.HttpURLConnection).apply {
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Socks5ProxyAndroid")
+                setRequestProperty("Accept", "application/json")
+            }
+            if (connection.responseCode !in 200..299) {
+                return@withContext PublicIpResult(false, message = "HTTP ${connection.responseCode}")
+            }
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val json = org.json.JSONObject(body)
+            val ip = json.optString("ip").trim()
+            val country = json.optString("country").trim()
+            val countryCode = json.optString("country_code").trim()
+            if (ip.isBlank()) {
+                PublicIpResult(false, message = "Не удалось определить IP")
+            } else {
+                val label = listOfNotNull(countryCode.takeIf { it.isNotBlank() }, country.takeIf { it.isNotBlank() }).joinToString(" · ")
+                PublicIpResult(true, ip = ip, country = label, message = if (label.isNotBlank()) "$ip ($label)" else ip)
+            }
+        } catch (_: CancellationException) {
+            throw CancellationException()
+        } catch (e: Exception) {
+            PublicIpResult(false, message = e.message ?: "Ошибка проверки IP")
         } finally {
             try { connection?.disconnect() } catch (_: Exception) {}
         }

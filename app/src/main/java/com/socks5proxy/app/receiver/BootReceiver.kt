@@ -3,6 +3,7 @@ package com.socks5proxy.app.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import com.socks5proxy.app.data.ProxyPreferences
 import com.socks5proxy.app.model.ProxyEngineMode
 import com.socks5proxy.app.service.LocalProxyService
@@ -18,10 +19,10 @@ class BootReceiver : BroadcastReceiver() {
             val prefs = ProxyPreferences(context)
             val config = prefs.loadConfig()
 
-            if (config.isAutoStartEnabled && config.isValid) {
+            if (config.isAutoStartEnabled && config.isReadyForConnection) {
                 if (config.engineMode == ProxyEngineMode.LOCAL_PROXY) {
                     LocalProxyService.start(context)
-                } else {
+                } else if (VpnService.prepare(context) == null) {
                     Socks5VpnService.start(context)
                 }
             }

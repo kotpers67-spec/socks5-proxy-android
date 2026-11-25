@@ -61,6 +61,27 @@ internal object VpnTunnelConfigBuilder {
             .put("policy", policy)
             .put("metrics", JSONObject().put("listen", "127.0.0.1:$metricsPort"))
 
+        if (config.isBypassLanEnabled) {
+            val privateCidrs = JSONArray()
+                .put("10.0.0.0/8")
+                .put("172.16.0.0/12")
+                .put("192.168.0.0/16")
+                .put("127.0.0.0/8")
+                .put("169.254.0.0/16")
+                .put("fc00::/7")
+                .put("fe80::/10")
+            val lanRule = JSONObject()
+                .put("type", "field")
+                .put("ip", privateCidrs)
+                .put("outboundTag", "direct")
+            root.put(
+                "routing",
+                JSONObject()
+                    .put("domainStrategy", "IPIfNonMatch")
+                    .put("rules", JSONArray().put(lanRule))
+            )
+        }
+
         return BuiltVpnConfig(root.toString(), measuredTag)
     }
 

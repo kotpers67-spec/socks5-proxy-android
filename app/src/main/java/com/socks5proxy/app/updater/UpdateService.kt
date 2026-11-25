@@ -22,7 +22,8 @@ data class UpdateInfo(
     val latestVersion: String,
     val downloadUrl: String,
     val releaseNotes: String,
-    val sha256: String = ""
+    val sha256: String = "",
+    val errorMessage: String? = null
 )
 
 object UpdateService {
@@ -66,7 +67,13 @@ object UpdateService {
             }
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                    return@withContext UpdateInfo(false, currentVersion, "", "")
+                    return@withContext UpdateInfo(
+                        hasUpdate = false,
+                        latestVersion = currentVersion,
+                        downloadUrl = "",
+                        releaseNotes = "",
+                        errorMessage = "GitHub API вернул HTTP ${connection.responseCode}"
+                    )
                 }
 
                 val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
@@ -92,8 +99,14 @@ object UpdateService {
             } finally {
                 connection.disconnect()
             }
-        } catch (_: Exception) {
-            UpdateInfo(false, currentVersion, "", "")
+        } catch (e: Exception) {
+            UpdateInfo(
+                hasUpdate = false,
+                latestVersion = currentVersion,
+                downloadUrl = "",
+                releaseNotes = "",
+                errorMessage = e.localizedMessage ?: "Не удалось связаться с GitHub"
+            )
         }
     }
 
@@ -236,7 +249,7 @@ object UpdateService {
         }
     }
 
-    private fun isApkValid(file: File): Boolean {
+    fun isApkValid(file: File): Boolean {
         if (!file.isFile || file.length() < 1024 * 1024) return false
         return try {
             ZipFile(file).use { zip ->
@@ -245,6 +258,16 @@ object UpdateService {
             }
         } catch (_: Exception) {
             false
+        }
+    }
+
+    fun cleanupOldUpdates(context: Context, keepFileName: String? = null) {
+        runCatching {
+            getUpdatesFolder(context).listFiles()?.forEach { file ->
+                if (file.isFile && file.name != keepFileName && file.name != "update.apk.part") {
+                    file.delete()
+                }
+            }
         }
     }
 

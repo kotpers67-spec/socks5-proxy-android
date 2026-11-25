@@ -47,25 +47,30 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -141,7 +146,8 @@ fun MainScreen(
                     onToggleTheme = { viewModel.toggleDarkTheme() },
                     onRefresh = {
                         viewModel.checkProxyPing()
-                        viewModel.showToast("Состояние службы SOCKS5 обновлено")
+                        val modeLabel = if (uiState.config.engineMode == ProxyEngineMode.VPN_PROFILE) "VPN" else "SOCKS5"
+                        viewModel.showToast("Состояние службы $modeLabel обновлено")
                     }
                 )
 
@@ -214,9 +220,11 @@ fun MainScreen(
             if (uiState.isProfileEditorOpen && uiState.editingProfile != null) {
                 ProfileEditorDialog(
                     profile = uiState.editingProfile,
+                    canDelete = uiState.config.profiles.any { it.id == uiState.editingProfile.id },
                     onSave = { viewModel.saveProfile(it) },
                     onDismiss = { viewModel.closeProfileEditor() },
-                    onDelete = { viewModel.deleteProfile(it) }
+                    onDelete = { viewModel.deleteProfile(it) },
+                    onShowToast = { viewModel.showToast(it) }
                 )
             }
 
@@ -382,8 +390,14 @@ private fun HomeTabContent(
         }
     }
 
-    var copiedText by remember { mutableStateOf("Скопировать адрес для браузера (127.0.0.1:${if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort})") }
-    var isCopiedActive by remember { mutableStateOf(false) }
+    val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
+    var lastCopiedAddr by remember { mutableStateOf<String?>(null) }
+    val isCopiedActive = lastCopiedAddr == "127.0.0.1:$listenPort"
+    val copiedText = if (isCopiedActive) {
+        "Скопировано: 127.0.0.1:$listenPort"
+    } else {
+        "Скопировать адрес для браузера (127.0.0.1:$listenPort)"
+    }
 
     NeumorphicCard(
         modifier = Modifier.fillMaxWidth()
@@ -437,58 +451,115 @@ private fun HomeTabContent(
             if (tunnelStatus.state == TunnelState.CONNECTED) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.insetBg)
-                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
-                        .clickable(enabled = !uiState.isCheckingPing) { viewModel.checkProxyPing() }
-                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (uiState.isCheckingPing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            color = colors.accent,
-                            strokeWidth = 1.5.dp
-                        )
-                        Text(
-                            text = "Замер пинга...",
-                            style = TextStyle(color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                        )
-                    } else if (uiState.pingResult != null) {
-                        val isOk = uiState.pingResult.isSuccess
-                        val pingColor = if (isOk) {
-                            if (uiState.pingResult.latencyMs < 150) colors.accent
-                            else if (uiState.pingResult.latencyMs < 350) colors.accent.copy(alpha = 0.8f)
-                            else colors.danger
-                        } else colors.danger
-                        Icon(
-                            imageVector = Icons.Default.Speed,
-                            contentDescription = null,
-                            tint = pingColor,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = if (isOk) "${uiState.pingResult.latencyMs} мс" else "Сбой сети",
-                            style = TextStyle(
-                                color = pingColor,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.insetBg)
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                            .clickable(enabled = !uiState.isCheckingPing) { viewModel.checkProxyPing() }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        if (uiState.isCheckingPing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = colors.accent,
+                                strokeWidth = 1.5.dp
                             )
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Speed,
-                            contentDescription = null,
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = "Проверить пинг",
-                            style = TextStyle(color = colors.textMuted, fontSize = 11.sp)
-                        )
+                            Text(
+                                text = "Пинг...",
+                                style = TextStyle(color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            )
+                        } else if (uiState.pingResult != null) {
+                            val isOk = uiState.pingResult.isSuccess
+                            val pingColor = if (isOk) {
+                                if (uiState.pingResult.latencyMs < 150) colors.accent
+                                else if (uiState.pingResult.latencyMs < 350) colors.accent.copy(alpha = 0.8f)
+                                else colors.danger
+                            } else colors.danger
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                tint = pingColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = if (isOk) "${uiState.pingResult.latencyMs} мс" else "Сбой сети",
+                                style = TextStyle(
+                                    color = pingColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "Пинг",
+                                style = TextStyle(color = colors.textMuted, fontSize = 11.sp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.insetBg)
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(8.dp))
+                            .clickable(enabled = !uiState.isCheckingPublicIp) { viewModel.checkPublicIp() }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        if (uiState.isCheckingPublicIp) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = colors.accent,
+                                strokeWidth = 1.5.dp
+                            )
+                            Text(
+                                text = "IP...",
+                                style = TextStyle(color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            )
+                        } else if (uiState.publicIpResult != null && uiState.publicIpResult.isSuccess) {
+                            Icon(
+                                imageVector = Icons.Default.Public,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = uiState.publicIpResult.message,
+                                style = TextStyle(
+                                    color = colors.accent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Public,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "Узнать IP",
+                                style = TextStyle(color = colors.textMuted, fontSize = 11.sp)
+                            )
+                        }
                     }
                 }
             }
@@ -504,29 +575,57 @@ private fun HomeTabContent(
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Column {
-                    val portNote = if (tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort) {
-                        " (порт ${uiState.config.localListenPort} занят)"
+                    if (uiState.config.engineMode == ProxyEngineMode.VPN_PROFILE) {
+                        val vpn = uiState.config.activeVpnProfile
+                        val chainText = if (uiState.config.isVpnToSocksChainEnabled && activeProfile.isValid) {
+                            " → SOCKS5 ${activeProfile.host}:${activeProfile.port}"
+                        } else ""
+                        Text(
+                            text = "TUN → ${vpn?.name ?: "VPN-сервер не выбран"}",
+                            style = TextStyle(
+                                color = colors.textMuted,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (vpn != null) "${vpn.protocol.uppercase()} · ${vpn.host}:${vpn.port}$chainText" else "Импортируйте сервер во вкладке «Серверы»",
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     } else {
-                        ""
+                        val portNote = if (tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort) {
+                            " (порт ${uiState.config.localListenPort} занят)"
+                        } else {
+                            ""
+                        }
+                        val prefix = if (uiState.config.engineMode == ProxyEngineMode.SYSTEM_VPN) "TUN" else "127.0.0.1:$listenPort$portNote"
+                        Text(
+                            text = "$prefix →",
+                            style = TextStyle(
+                                color = colors.textMuted,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Text(
+                            text = if (activeProfile.isValid) "${activeProfile.host}:${activeProfile.port}" else "Нажмите кнопку ниже для настройки SOCKS5",
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
                     }
-                    val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
-                    Text(
-                        text = "127.0.0.1:$listenPort$portNote →",
-                        style = TextStyle(
-                            color = colors.textMuted,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    )
-                    Text(
-                        text = "${activeProfile.host}:${activeProfile.port}",
-                        style = TextStyle(
-                            color = colors.textPrimary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    )
                 }
             }
 
@@ -915,12 +1014,10 @@ private fun HomeTabContent(
                     )
                     .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
                     .clickable {
-                        val listenPort = if (tunnelStatus.boundPort > 0) tunnelStatus.boundPort else uiState.config.localListenPort
                         val addr = "127.0.0.1:$listenPort"
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         clipboard?.setPrimaryClip(ClipData.newPlainText("SOCKS5 Proxy", addr))
-                        copiedText = "Скопировано: $addr"
-                        isCopiedActive = true
+                        lastCopiedAddr = addr
                         viewModel.showToast("Адрес $addr скопирован в буфер")
                     }
                     .padding(vertical = 13.dp, horizontal = 14.dp),
@@ -1030,6 +1127,67 @@ private fun ServersTabContent(
                             .padding(horizontal = 11.dp, vertical = 8.dp)
                     ) {
                         Text("Импорт", color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            if (uiState.config.vpnProfiles.isNotEmpty()) {
+                val hasSubscriptions = uiState.config.vpnProfiles.any { it.sourceUrl.startsWith("https://", ignoreCase = true) }
+                val hasPingResults = uiState.config.vpnProfiles.any { uiState.serverPingMap[it.id] != null }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (hasSubscriptions) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable(enabled = !uiState.isRefreshingSubscriptions) { viewModel.refreshVpnSubscriptions() }
+                                .padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (uiState.isRefreshingSubscriptions) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), color = colors.accent, strokeWidth = 1.5.dp)
+                                } else {
+                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = colors.accent, modifier = Modifier.size(13.dp))
+                                }
+                                Text("Подписка", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    if (hasPingResults) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable { viewModel.sortVpnProfilesByPing() }
+                                .padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(imageVector = Icons.AutoMirrored.Filled.Sort, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(13.dp))
+                                Text("По пингу", color = colors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .clickable { viewModel.selectBestVpnProfile() }
+                                .padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            Text("Лучший", color = colors.accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -1164,36 +1322,58 @@ private fun ServersTabContent(
                     )
                 )
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(colors.gradStart, colors.gradEnd)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (uiState.config.profiles.any { it.isValid }) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                                .clickable(enabled = !uiState.isPingingAllSocks) { viewModel.pingAllSocksProfiles() }
+                                .padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            if (uiState.isPingingAllSocks) {
+                                CircularProgressIndicator(modifier = Modifier.size(13.dp), color = colors.accent, strokeWidth = 1.5.dp)
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Icon(imageVector = Icons.Default.Speed, contentDescription = null, tint = colors.accent, modifier = Modifier.size(13.dp))
+                                    Text("Пинг", color = colors.accent, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(colors.gradStart, colors.gradEnd)
+                                )
                             )
-                        )
-                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
-                        .clickable { viewModel.openAddProfile() }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                            .clickable { viewModel.openAddProfile() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = null,
-                            tint = colors.accent,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = "Добавить",
-                            style = TextStyle(
-                                color = colors.textPrimary,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.SemiBold
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(14.dp)
                             )
-                        )
+                            Text(
+                                text = "Добавить",
+                                style = TextStyle(
+                                    color = colors.textPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -1359,10 +1539,11 @@ private fun ServersTabContent(
                 valueColor = colors.textPrimary
             )
 
+            val isPortBusy = tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort
             TelemetryRow(
-                label = "Основной порт (занят)",
+                label = if (isPortBusy) "Основной порт (занят)" else "Настроенный порт",
                 value = "127.0.0.1:${uiState.config.localListenPort}",
-                valueColor = if (tunnelStatus.boundPort > 0 && tunnelStatus.boundPort != uiState.config.localListenPort) colors.danger else colors.textMuted
+                valueColor = if (isPortBusy) colors.danger else colors.textMuted
             )
 
             TelemetryRow(
@@ -1865,6 +2046,42 @@ private fun SettingsTabContent(
                     onCheckedChange = { viewModel.toggleAutoStart(it) }
                 )
             }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.dividerColor)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Обход локальной сети (Bypass LAN)",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Text(
+                        text = "Пускать 192.168.x.x и 10.x.x.x напрямую без VPN",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                NeumorphicSwitch(
+                    checked = uiState.config.isBypassLanEnabled,
+                    onCheckedChange = { viewModel.toggleBypassLan(it) }
+                )
+            }
         }
     }
 
@@ -1882,6 +2099,49 @@ private fun SettingsTabContent(
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Локальный порт SOCKS5: ${uiState.config.localListenPort}",
+                    style = TextStyle(
+                        color = colors.textPrimary,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+                Text(
+                    text = "Порт на 127.0.0.1 для подключения браузера и Telegram",
+                    style = TextStyle(color = colors.textMuted, fontSize = 11.5.sp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(10808, 10809, 7890, 20808).forEach { portVal ->
+                        val isSel = uiState.config.localListenPort == portVal
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSel) colors.accent.copy(alpha = 0.2f) else colors.insetBg)
+                                .border(1.dp, if (isSel) colors.accent else colors.borderSubtle, RoundedCornerShape(8.dp))
+                                .clickable { viewModel.setLocalListenPort(portVal) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "$portVal",
+                                color = if (isSel) colors.accent else colors.textSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.dividerColor)
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1968,6 +2228,100 @@ private fun SettingsTabContent(
         }
     }
 
+    var showLogsDialog by remember { mutableStateOf(false) }
+    val logs by viewModel.logsFlow.collectAsState()
+    val context = LocalContext.current
+
+    NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Журнал диагностики",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        text = "Записей в памяти: ${logs.size}",
+                        style = TextStyle(
+                            color = colors.textMuted,
+                            fontSize = 11.5.sp
+                        )
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                        .clickable { showLogsDialog = true }
+                        .padding(horizontal = 11.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        text = "Открыть",
+                        color = colors.accent,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+
+    if (showLogsDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogsDialog = false },
+            title = { Text("Журнал событий (${logs.size})") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (logs.isEmpty()) {
+                        Text("Событий пока нет.", color = colors.textMuted, fontSize = 12.sp)
+                    } else {
+                        logs.asReversed().take(50).forEach { line ->
+                            Text(
+                                text = line,
+                                color = colors.textSecondary,
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Socks5Logs", logs.joinToString("\n")))
+                    viewModel.showToast("Логи скопированы")
+                }) { Text("Копировать") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { viewModel.clearLogs() }) { Text("Очистить", color = colors.danger) }
+                    TextButton(onClick = { showLogsDialog = false }) { Text("Закрыть") }
+                }
+            }
+        )
+    }
+
     NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -1989,8 +2343,9 @@ private fun SettingsTabContent(
                             fontWeight = FontWeight.Bold
                         )
                     )
+                    val verLabel = if (uiState.currentAppVersion.isNotBlank()) "v${uiState.currentAppVersion}" else "текущая"
                     Text(
-                        text = if (uiState.updateInfo != null) "Доступна версия v${uiState.updateInfo.latestVersion}" else "Текущая версия установлена",
+                        text = if (uiState.updateInfo != null) "Доступна v${uiState.updateInfo.latestVersion} (у вас $verLabel)" else "Установлена версия $verLabel",
                         style = TextStyle(
                             color = if (uiState.updateInfo != null) colors.accent else colors.textMuted,
                             fontSize = 11.5.sp
@@ -2006,7 +2361,7 @@ private fun SettingsTabContent(
                             else Brush.linearGradient(listOf(colors.insetBg, colors.insetBg))
                         )
                         .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
-                        .clickable {
+                        .clickable(enabled = !uiState.isCheckingUpdate) {
                             if (uiState.updateInfo != null) {
                                 viewModel.showUpdateDialog()
                             } else {
@@ -2015,13 +2370,42 @@ private fun SettingsTabContent(
                         }
                         .padding(horizontal = 11.dp, vertical = 7.dp)
                 ) {
+                    if (uiState.isCheckingUpdate) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), color = colors.accent, strokeWidth = 1.5.dp)
+                    } else {
+                        Text(
+                            text = if (uiState.updateInfo != null) "Обновить" else "Проверить",
+                            color = colors.accent,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (uiState.updateInfo != null) "Обновить" else "Проверить",
-                        color = colors.accent,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.SemiBold
+                        text = "Автопроверка обновлений",
+                        style = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Text(
+                        text = "Проверять новые релизы GitHub при запуске",
+                        style = TextStyle(color = colors.textMuted, fontSize = 11.sp)
                     )
                 }
+                NeumorphicSwitch(
+                    checked = uiState.config.isAutoCheckUpdatesEnabled,
+                    onCheckedChange = { viewModel.toggleAutoCheckUpdates(it) }
+                )
             }
         }
     }
@@ -2644,6 +3028,7 @@ private fun VpnImportDialog(
     onDismiss: () -> Unit
 ) {
     val colors = NeumorphismTheme.colors
+    val context = LocalContext.current
     var source by remember { mutableStateOf("") }
 
     AlertDialog(
@@ -2666,6 +3051,23 @@ private fun VpnImportDialog(
                     maxLines = 7,
                     enabled = !isImporting
                 )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(10.dp))
+                        .clickable(enabled = !isImporting) {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val clip = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                            if (clip.isNotBlank()) source = clip.trim()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.ContentPaste, contentDescription = null, tint = colors.accent, modifier = Modifier.size(14.dp))
+                    Text("Вставить из буфера обмена", color = colors.accent, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+                }
                 if (isImporting) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
