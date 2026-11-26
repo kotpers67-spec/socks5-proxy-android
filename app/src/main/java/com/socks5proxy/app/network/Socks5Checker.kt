@@ -242,36 +242,45 @@ object Socks5Checker {
         }
     }
 
-    suspend fun pingHttp(urlStr: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): PingResult = withContext(Dispatchers.IO) {
-        var connection: java.net.HttpURLConnection? = null
-        try {
-            val startNano = System.nanoTime()
-            val url = java.net.URL(urlStr)
-            connection = (url.openConnection() as java.net.HttpURLConnection).apply {
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                instanceFollowRedirects = false
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "SOCKS5Proxy/1.5")
-                setRequestProperty("Connection", "close")
-            }
-            connection.connect()
-            val code = connection.responseCode
-            val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
-            if (code in 200..399) {
-                PingResult(true, latencyMs, "$latencyMs мс")
-            } else {
-                PingResult(false, latencyMs, "HTTP $code")
-            }
-        } catch (_: CancellationException) {
-            throw CancellationException()
-        } catch (_: java.net.SocketTimeoutException) {
-            PingResult(false, 0, "Таймаут")
-        } catch (e: Exception) {
-            PingResult(false, 0, e.message ?: "Сбой соединения")
-        } finally {
-            try { connection?.disconnect() } catch (_: Exception) {}
+    suspend fun pingHttp(urlStr: String = "https://cp.cloudflare.com/generate_204", timeoutMs: Int = 4000): PingResult = withContext(Dispatchers.IO) {
+        val urls = if (urlStr == "https://cp.cloudflare.com/generate_204") {
+            listOf(urlStr, "https://www.gstatic.com/generate_204")
+        } else {
+            listOf(urlStr)
         }
+        var lastResult = PingResult(false, 0, "Сбой соединения")
+        for (targetUrl in urls) {
+            var connection: java.net.HttpURLConnection? = null
+            try {
+                val startNano = System.nanoTime()
+                val url = java.net.URL(targetUrl)
+                connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                    instanceFollowRedirects = false
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Socks5ProxyAndroid/1.5")
+                    setRequestProperty("Connection", "close")
+                }
+                connection.connect()
+                val code = connection.responseCode
+                val latencyMs = (System.nanoTime() - startNano) / 1_000_000L
+                if (code in 200..399) {
+                    return@withContext PingResult(true, latencyMs, "$latencyMs мс")
+                } else {
+                    lastResult = PingResult(false, latencyMs, "HTTP $code")
+                }
+            } catch (_: CancellationException) {
+                throw CancellationException()
+            } catch (_: java.net.SocketTimeoutException) {
+                lastResult = PingResult(false, 0, "Таймаут")
+            } catch (e: Exception) {
+                lastResult = PingResult(false, 0, e.message ?: "Сбой соединения")
+            } finally {
+                try { connection?.disconnect() } catch (_: Exception) {}
+            }
+        }
+        lastResult
     }
 
     suspend fun checkPublicIp(

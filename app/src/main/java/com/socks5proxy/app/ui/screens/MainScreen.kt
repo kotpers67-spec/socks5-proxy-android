@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -72,7 +73,9 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -251,6 +254,7 @@ fun MainScreen(
             val update = uiState.updateInfo
             if (uiState.isUpdateDialogVisible && update != null) {
                 UpdateAvailableDialog(
+                    currentVersion = uiState.currentAppVersion,
                     updateInfo = update,
                     isDownloading = uiState.isDownloadingUpdate,
                     progress = uiState.updateDownloadProgress,
@@ -258,7 +262,10 @@ fun MainScreen(
                     totalBytes = uiState.totalBytes,
                     isResuming = uiState.isResumingDownload,
                     isReady = uiState.isUpdateApkReady,
+                    errorMessage = uiState.updateError,
                     onInstall = { viewModel.downloadAndInstallUpdate() },
+                    onCancelDownload = { viewModel.cancelUpdateDownload() },
+                    onResetDownload = { viewModel.resetUpdateDownload() },
                     onSnooze = { viewModel.snoozeUpdate() },
                     onDismiss = { viewModel.dismissUpdate() }
                 )
@@ -3093,6 +3100,7 @@ private fun VpnImportDialog(
 
 @Composable
 private fun UpdateAvailableDialog(
+    currentVersion: String,
     updateInfo: com.socks5proxy.app.updater.UpdateInfo,
     isDownloading: Boolean,
     progress: Int,
@@ -3100,94 +3108,251 @@ private fun UpdateAvailableDialog(
     totalBytes: Long,
     isResuming: Boolean,
     isReady: Boolean,
+    errorMessage: String?,
     onInstall: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onResetDownload: () -> Unit,
     onSnooze: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = NeumorphismTheme.colors
 
-    AlertDialog(
-        onDismissRequest = { if (!isDownloading) onDismiss() },
-        title = {
-            Text(
-                text = "Доступно обновление v${updateInfo.latestVersion}",
-                color = colors.textPrimary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (updateInfo.releaseNotes.isNotBlank()) {
+    Dialog(onDismissRequest = { if (!isDownloading) onDismiss() }) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(colors.bgBase)
+                .border(1.dp, colors.borderSubtle, RoundedCornerShape(28.dp))
+                .padding(20.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 40.dp, height = 4.dp)
+                        .align(Alignment.CenterHorizontally)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(colors.textMuted.copy(alpha = 0.45f))
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Доступно обновление",
+                            style = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        val fromVer = if (currentVersion.isNotBlank()) "v$currentVersion → " else ""
+                        Text(
+                            text = "${fromVer}v${updateInfo.latestVersion}",
+                            style = TextStyle(
+                                color = colors.accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    }
+
+                    if (!isDownloading) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd)))
+                                .border(1.dp, colors.borderSubtle, CircleShape)
+                                .clickable(onClick = onDismiss),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Закрыть",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 60.dp, max = 210.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.insetBg)
+                        .border(1.dp, colors.borderSubtle, RoundedCornerShape(14.dp))
+                        .padding(12.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                     Text(
-                        text = updateInfo.releaseNotes,
-                        color = colors.textSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
-                } else {
-                    Text(
-                        text = "Вышла новая версия приложения с улучшениями и исправлениями.",
-                        color = colors.textSecondary,
-                        fontSize = 12.sp
+                        text = updateInfo.releaseNotes.ifBlank {
+                            "Вышла новая версия приложения с улучшениями и исправлениями."
+                        },
+                        style = TextStyle(
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
                     )
                 }
 
-                if (isDownloading || downloadedBytes > 0L) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                if (isDownloading || isReady || downloadedBytes > 0L) {
                     val downloadedMb = String.format(java.util.Locale.US, "%.1f", downloadedBytes / (1024f * 1024f))
                     val totalMb = if (totalBytes > 0L) String.format(java.util.Locale.US, "%.1f", totalBytes / (1024f * 1024f)) else "?"
-                    val textStatus = if (isDownloading) {
-                        "Загрузка: $progress% ($downloadedMb МБ / $totalMb МБ)"
-                    } else if (isResuming) {
-                        "Загрузка приостановлена ($downloadedMb МБ / $totalMb МБ)"
-                    } else {
-                        "Прогресс: $progress%"
+                    val statusLabel = when {
+                        isReady -> "APK загружен и проверен ($downloadedMb МБ)"
+                        isDownloading && totalBytes > 0L -> "Загрузка: $progress% ($downloadedMb / $totalMb МБ)"
+                        isDownloading -> "Загрузка: $downloadedMb МБ..."
+                        else -> "Пауза: скачано $downloadedMb МБ"
                     }
-                    Text(
-                        text = textStatus,
-                        color = colors.accent,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = colors.accent,
-                            strokeWidth = 2.dp
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = statusLabel,
+                                style = TextStyle(
+                                    color = colors.accent,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                            if (!isDownloading && !isReady && downloadedBytes > 0L) {
+                                Text(
+                                    text = "Сбросить",
+                                    color = colors.danger,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.clickable(onClick = onResetDownload)
+                                )
+                            }
+                        }
+                        if (isDownloading) {
+                            if (totalBytes > 0L) {
+                                LinearProgressIndicator(
+                                    progress = { (progress / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = colors.accent,
+                                    trackColor = colors.insetDeepBg
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = colors.accent,
+                                    trackColor = colors.insetDeepBg
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (!errorMessage.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(colors.danger.copy(alpha = 0.12f))
+                            .border(1.dp, colors.danger.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = errorMessage,
+                            color = colors.danger,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp
                         )
                     }
                 }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = !isDownloading,
-                onClick = onInstall
-            ) {
-                Text(
-                    text = when {
-                        isDownloading -> "Загрузка..."
-                        isReady -> "Установить"
-                        isResuming -> "Возобновить скачивание"
-                        else -> "Обновить сейчас"
-                    },
-                    color = colors.accent,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        },
-        dismissButton = {
-            if (!isDownloading) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onSnooze) {
-                        Text("Отложить", color = colors.accent)
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text("Закрыть", color = colors.textMuted)
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Brush.linearGradient(listOf(colors.gradStart, colors.gradEnd)))
+                        .border(1.dp, colors.accent.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                        .clickable(enabled = !isDownloading, onClick = onInstall)
+                        .padding(vertical = 13.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = when {
+                            isDownloading -> "Идёт загрузка..."
+                            isReady -> "Установить обновление"
+                            isResuming -> "Возобновить скачивание"
+                            else -> "Обновить сейчас"
+                        },
+                        style = TextStyle(
+                            color = if (isDownloading) colors.textMuted else colors.accent,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (isDownloading) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                                .clickable(onClick = onCancelDownload)
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Пауза / Отмена", color = colors.danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                                .clickable(onClick = onSnooze)
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Отложить 24ч", color = colors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(colors.insetBg)
+                                .border(1.dp, colors.borderSubtle, RoundedCornerShape(12.dp))
+                                .clickable(onClick = onDismiss)
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Закрыть", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
         }
-    )
+    }
 }

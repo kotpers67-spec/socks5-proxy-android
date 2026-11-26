@@ -44,13 +44,22 @@ object UpdateService {
         return folder
     }
 
-    fun getPartFile(context: Context): File {
-        return File(getUpdatesFolder(context), "update.apk.part")
+    fun getPartFile(context: Context, version: String = ""): File {
+        val safeVer = version.trim().replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val fileName = if (safeVer.isNotEmpty()) "update-$safeVer.apk.part" else "update.apk.part"
+        return File(getUpdatesFolder(context), fileName)
     }
 
-    fun getExistingPartBytes(context: Context): Long {
-        val part = getPartFile(context)
+    fun getExistingPartBytes(context: Context, version: String = ""): Long {
+        val part = getPartFile(context, version)
         return if (part.isFile) part.length() else 0L
+    }
+
+    fun clearPartFile(context: Context, version: String = "") {
+        runCatching {
+            val part = getPartFile(context, version)
+            if (part.exists()) part.delete()
+        }
     }
 
     fun getTargetApkFile(context: Context, version: String): File {
@@ -120,7 +129,7 @@ object UpdateService {
             "Ссылка на APK должна вести на проверенные адреса GitHub по HTTPS"
         }
 
-        val temporaryFile = getPartFile(context)
+        val temporaryFile = getPartFile(context, updateInfo.latestVersion)
         val apkFile = getTargetApkFile(context, updateInfo.latestVersion)
 
         // Если готовый валидный APK уже скачан целиком
@@ -261,10 +270,13 @@ object UpdateService {
         }
     }
 
-    fun cleanupOldUpdates(context: Context, keepFileName: String? = null) {
+    fun cleanupOldUpdates(context: Context, keepVersion: String? = null) {
+        val safeVer = keepVersion?.trim()?.replace(Regex("[^a-zA-Z0-9._-]"), "_").orEmpty()
+        val keepApk = if (safeVer.isNotEmpty()) "Socks5Proxy-$keepVersion.apk" else null
+        val keepPart = if (safeVer.isNotEmpty()) "update-$safeVer.apk.part" else null
         runCatching {
             getUpdatesFolder(context).listFiles()?.forEach { file ->
-                if (file.isFile && file.name != keepFileName && file.name != "update.apk.part") {
+                if (file.isFile && file.name != keepApk && file.name != keepPart) {
                     file.delete()
                 }
             }

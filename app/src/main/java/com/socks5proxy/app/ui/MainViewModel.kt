@@ -16,6 +16,7 @@ import com.socks5proxy.app.model.TunnelStatus
 import com.socks5proxy.app.network.PingResult
 import com.socks5proxy.app.network.PublicIpResult
 import com.socks5proxy.app.network.Socks5Checker
+import com.socks5proxy.app.network.XrayPingService
 import com.socks5proxy.app.service.LocalProxyService
 import com.socks5proxy.app.service.Socks5VpnService
 import com.socks5proxy.app.updater.UpdateInfo
@@ -67,6 +68,7 @@ data class MainUiState(
     val isResumingDownload: Boolean = false,
     val isUpdateDialogVisible: Boolean = false,
     val isUpdateApkReady: Boolean = false,
+    val updateError: String? = null,
     val isDarkTheme: Boolean = true,
     val activeTab: Int = 0,
     val toastMessage: String? = null,
@@ -84,6 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val initialDarkTheme = sharedPrefs.getBoolean("proxy_dark_theme", true)
     private var toastJob: Job? = null
+    private var downloadJob: Job? = null
     private var downloadedUpdateApk: File? = null
 
     private val _uiState = MutableStateFlow(
@@ -172,7 +175,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val isSnoozedActive = snoozedVer == info.latestVersion && (System.currentTimeMillis() - snoozedTime < 24 * 60 * 60 * 1000L)
 
             val showDialog = hasUpdate && (forceShowDialog || !isSnoozedActive)
-            val existingPart = UpdateService.getExistingPartBytes(context)
+            if (hasUpdate) {
+                UpdateService.cleanupOldUpdates(context, keepVersion = info.latestVersion)
+            }
+            val targetApk = if (hasUpdate) UpdateService.getTargetApkFile(context, info.latestVersion) else null
+            val isReady = targetApk != null && UpdateService.isApkValid(targetApk)
+            val existingPart = if (hasUpdate && !isReady) UpdateService.getExistingPartBytes(context, info.latestVersion) else 0L
 
             _uiState.update {
                 it.copy(
@@ -180,8 +188,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isCheckingUpdate = false,
                     updateInfo = info.takeIf { u -> u.hasUpdate },
                     isUpdateDialogVisible = showDialog,
-                    downloadedBytes = existingPart,
-                    isResumingDownload = existingPart > 0
+                    isUpdateApkReady = isReady,
+                    updateError = null,
+                    downloadedBytes = if (isReady && targetApk != null) targetApk.length() else existingPart,
+                    totalBytes = if (isReady && targetApk != null) targetApk.length() else it.totalBytes,
+                    isResumingDownload = !isReady && existingPart > 0
                 )
             }
 
@@ -197,13 +208,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showUpdateDialog() {
-        if (_uiState.value.updateInfo != null) {
-            val existingPart = UpdateService.getExistingPartBytes(getApplication<Application>())
+        val info = _uiState.value.updateInfo
+        if (info != null) {
+            val context = getApplication<Application>()
+            val targetApk = UpdateService.getTargetApkFile(context, info.latestVersion)
+            val isReady = UpdateService.isApkValid(targetApk)
+            val existingPart = if (!isReady) UpdateService.getExistingPartBytes(context, info.latestVersion) else 0L
             _uiState.update {
                 it.copy(
                     isUpdateDialogVisible = true,
-                    downloadedBytes = existingPart,
-                    isResumingDownload = existingPart > 0
+                    isUpdateApkReady = isReady,
+                    updateError = null,
+                    downloadedBytes = if (isReady) targetApk.length() else existingPart,
+                    totalBytes = if (isReady) targetApk.length() else it.totalBytes,
+                    isResumingDownload = !isReady && existingPart > 0
                 )
             }
         } else {
@@ -222,8 +240,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        _uiState.update { it.copy(isDownloadingUpdate = true) }
-        viewModelScope.launch {
+        _uiState.update { it.copy(isDownloadingUpdate = true, updateError = null) }
+        downloadJob = viewModelScope.launch {
             try {
                 val apk = UpdateService.downloadApk(context, info) { percent, downloaded, total ->
                     _uiState.update {
@@ -236,37 +254,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 downloadedUpdateApk = apk
-                _uiState.update { it.copy(isDownloadingUpdate = false, isUpdateApkReady = true) }
+                _uiState.update { it.copy(isDownloadingUpdate = false, isUpdateApkReady = true, updateError = null) }
                 openDownloadedUpdate(context, apk)
-            } catch (error: Exception) {
-                val downloadedPart = UpdateService.getExistingPartBytes(context)
-                val partMb = downloadedPart / (1024 * 1024)
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                val downloadedPart = UpdateService.getExistingPartBytes(context, info.latestVersion)
                 _uiState.update {
                     it.copy(
                         isDownloadingUpdate = false,
                         downloadedBytes = downloadedPart,
-                        isResumingDownload = downloadedPart > 0
+                        isResumingDownload = downloadedPart > 0,
+                        updateError = null
                     )
                 }
-                val msg = if (downloadedPart > 0) {
-                    "Загрузка приостановлена на ${partMb} МБ. Нажмите «Возобновить», чтобы продолжить."
-                } else {
-                    error.message?.takeIf(String::isNotBlank) ?: "Не удалось скачать обновление"
+            } catch (error: Exception) {
+                val downloadedPart = UpdateService.getExistingPartBytes(context, info.latestVersion)
+                _uiState.update {
+                    it.copy(
+                        isDownloadingUpdate = false,
+                        downloadedBytes = downloadedPart,
+                        isResumingDownload = downloadedPart > 0,
+                        updateError = error.message?.takeIf(String::isNotBlank) ?: "Не удалось скачать обновление"
+                    )
                 }
-                showToast(msg)
             }
+        }
+    }
+
+    fun cancelUpdateDownload() {
+        downloadJob?.cancel()
+        downloadJob = null
+    }
+
+    fun resetUpdateDownload() {
+        cancelUpdateDownload()
+        val info = _uiState.value.updateInfo ?: return
+        val context = getApplication<Application>()
+        UpdateService.clearPartFile(context, info.latestVersion)
+        runCatching { UpdateService.getTargetApkFile(context, info.latestVersion).delete() }
+        _uiState.update {
+            it.copy(
+                isDownloadingUpdate = false,
+                isUpdateApkReady = false,
+                updateDownloadProgress = 0,
+                downloadedBytes = 0L,
+                totalBytes = 0L,
+                isResumingDownload = false,
+                updateError = null
+            )
         }
     }
 
     private fun openDownloadedUpdate(context: Context, apk: File) {
         try {
             val opened = UpdateService.openInstaller(context, apk)
-            showToast(
-                if (opened) "Подтвердите установку в окне Android"
-                else "Разрешите установку для приложения и нажмите кнопку ещё раз"
-            )
+            if (opened) {
+                showToast("Подтвердите установку в окне Android")
+            } else {
+                _uiState.update {
+                    it.copy(updateError = "Разрешите установку из неизвестных источников и нажмите «Установить»")
+                }
+            }
         } catch (error: Exception) {
-            showToast(error.message?.takeIf(String::isNotBlank) ?: "Не удалось открыть установщик Android")
+            _uiState.update {
+                it.copy(updateError = error.message?.takeIf(String::isNotBlank) ?: "Не удалось открыть установщик Android")
+            }
         }
     }
 
@@ -497,7 +548,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (config.engineMode == ProxyEngineMode.VPN_PROFILE) {
                     val activeVpn = config.activeVpnProfile
                     if (activeVpn != null) {
-                        Socks5Checker.pingTcp(activeVpn.host, activeVpn.port)
+                        val results = XrayPingService.pingServers(listOf(activeVpn))
+                        results[activeVpn.id] ?: PingResult(false, 0, "Нет ответа Xray")
                     } else {
                         PingResult(false, 0, "VPN-сервер не выбран")
                     }
@@ -523,7 +575,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _uiState.update { it.copy(pingingServerIds = it.pingingServerIds + profileId) }
-            val result = Socks5Checker.pingTcp(server.host, server.port)
+            val results = XrayPingService.pingServers(listOf(server))
+            val result = results[profileId] ?: PingResult(false, 0, "Нет ответа Xray")
             _uiState.update { state ->
                 state.copy(
                     pingingServerIds = state.pingingServerIds - profileId,
@@ -539,7 +592,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _uiState.update { it.copy(pingingServerIds = it.pingingServerIds + profileId) }
-            val result = Socks5Checker.pingTcp(profile.host, profile.port)
+            val result = Socks5Checker.checkConnection(profile)
             _uiState.update { state ->
                 state.copy(
                     pingingServerIds = state.pingingServerIds - profileId,
@@ -561,22 +614,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            val semaphore = Semaphore(5)
-            val jobs = profiles.map { server ->
-                launch {
-                    val result = semaphore.withPermit {
-                        Socks5Checker.pingTcp(server.host, server.port)
-                    }
-                    _uiState.update { state ->
-                        state.copy(
-                            pingingServerIds = state.pingingServerIds - server.id,
-                            serverPingMap = state.serverPingMap + (server.id to result)
-                        )
-                    }
-                }
+            val results = XrayPingService.pingServers(profiles)
+            _uiState.update { state ->
+                state.copy(
+                    isPingingAll = false,
+                    pingingServerIds = state.pingingServerIds - profiles.map { it.id }.toSet(),
+                    serverPingMap = state.serverPingMap + results
+                )
             }
-            jobs.joinAll()
-            _uiState.update { it.copy(isPingingAll = false) }
         }
     }
 
@@ -595,7 +640,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val jobs = profiles.map { profile ->
                 launch {
                     val result = semaphore.withPermit {
-                        Socks5Checker.pingTcp(profile.host, profile.port)
+                        Socks5Checker.checkConnection(profile)
                     }
                     _uiState.update { state ->
                         state.copy(
