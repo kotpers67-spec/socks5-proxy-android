@@ -98,13 +98,16 @@ class ProxyPreferences(context: Context) {
         try {
             val array = JSONArray(json)
             for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
+                val obj = array.optJSONObject(i) ?: continue
+                val host = obj.optString("host", "").trim()
+                val port = obj.optInt("port", 0)
+                if (host.isEmpty() || port !in 1..65535) continue
                 result.add(
                     ProxyProfile(
-                        id = obj.optString("id"),
-                        name = obj.optString("name", "Прокси"),
-                        host = obj.optString("host", "127.0.0.1"),
-                        port = obj.optInt("port", 1080),
+                        id = obj.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                        name = obj.optString("name", "Прокси").ifBlank { "Прокси" },
+                        host = host,
+                        port = port,
                         username = obj.optString("username", ""),
                         password = obj.optString("password", ""),
                         isUdpEnabled = obj.optBoolean("isUdpEnabled", true)

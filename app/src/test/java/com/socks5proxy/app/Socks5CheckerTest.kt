@@ -91,7 +91,7 @@ class Socks5CheckerTest {
             }
 
             val profile = ProxyProfile(
-                name = "LocalMockSocks",
+                name = "LocalTestSocks",
                 host = "127.0.0.1",
                 port = server.localPort,
                 username = "u1",
